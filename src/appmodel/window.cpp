@@ -43,6 +43,9 @@ void Window::SetContent(const Layout& layout) {
         (void)parent;
         throw std::logic_error("A child Layout cannot be used as window content");
     }
+    if (layout.state_->tabPage.lock()) {
+        throw std::logic_error("A TabPage Layout cannot be used as window content");
+    }
     if (auto owner = layout.state_->contentWindow.lock(); owner && owner != state_) {
         throw std::logic_error("A Layout cannot be content for multiple Windows");
     }

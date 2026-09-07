@@ -145,6 +145,7 @@ ControlType GetControlType(detail::ControlKind kind) noexcept {
     case detail::ControlKind::ComboBox: return ControlType::ComboBox;
     case detail::ControlKind::ProgressBar: return ControlType::ProgressBar;
     case detail::ControlKind::Slider: return ControlType::Slider;
+    case detail::ControlKind::TabView: return ControlType::TabView;
     }
     return ControlType::None;
 }
@@ -355,6 +356,37 @@ std::optional<SliderRef> ControlRef::AsSlider() const noexcept {
         return std::nullopt;
     }
     return SliderRef{state};
+}
+
+bool TabViewRef::IsValid() const noexcept {
+    const auto state = state_.lock();
+    return state && state->kind == detail::ControlKind::TabView &&
+           state->tabView;
+}
+
+std::size_t TabViewRef::GetTabCount() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::TabView ||
+        !state->tabView) {
+        return 0;
+    }
+    return state->tabView->pages.size();
+}
+
+std::optional<std::size_t> TabViewRef::GetSelectedIndex() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::TabView) {
+        return std::nullopt;
+    }
+    return state->selectedIndex;
+}
+
+std::optional<TabViewRef> ControlRef::AsTabView() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::TabView) {
+        return std::nullopt;
+    }
+    return TabViewRef{state};
 }
 
 bool operator==(const ControlRef& left, const ControlRef& right) noexcept {

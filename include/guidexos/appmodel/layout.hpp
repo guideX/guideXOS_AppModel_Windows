@@ -16,6 +16,7 @@ class RadioButton;
 class Slider;
 class TextArea;
 class TextBox;
+class TabView;
 
 namespace detail {
 struct LayoutState;
@@ -77,6 +78,7 @@ public:
              LayoutSizing sizing = LayoutSizing::Natural);
     void Add(TextBox& textBox, LayoutSizing sizing = LayoutSizing::Natural);
     void Add(TextArea& textArea, LayoutSizing sizing = LayoutSizing::Natural);
+    void Add(TabView& tabView, LayoutSizing sizing = LayoutSizing::Expand);
     void Add(Layout& layout, LayoutSizing sizing = LayoutSizing::Natural);
 
     // A spacer participates in sizing and positioning but never creates a
@@ -102,9 +104,13 @@ public:
     std::size_t ChildCount() const noexcept;
 
 private:
+    explicit Layout(std::shared_ptr<detail::LayoutState> state) noexcept
+        : state_(std::move(state)) {}
+
     std::shared_ptr<detail::LayoutState> state_;
 
     friend class Window;
+    friend class TabPage;
 };
 
 } // namespace guidexos::appmodel

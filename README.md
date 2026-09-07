@@ -1,6 +1,6 @@
 # guideXOS App Model for Windows
 
-This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, horizontal `Slider`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
+This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, horizontal `Slider`, `TabView` pages, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
 
 ## Current milestone
 
@@ -21,6 +21,7 @@ The current vertical slice demonstrates:
 - native-backed checkboxes and explicitly grouped radio buttons
 - portable determinate and indeterminate progress bars with clamped integer ranges
 - portable horizontal sliders with signed clamped integer ranges and user-change callbacks
+- portable TabView pages with nested layouts, selected-page callbacks, and preserved page state
 - deterministic choice callbacks across reentrancy, multiple windows, and close/reopen
 - nested vertical and horizontal layouts with natural, expanding, and spacer items
 - platform-neutral spacing, padding, geometry calculation, and deterministic resize behavior
@@ -75,6 +76,9 @@ shell.
 `PolishApp` is the focused ToolTip, StatusBar, nested-form, and resize sample.
 `TimerApp` is the focused repeating timer, stop/restart, and explicit-shutdown
 sample.
+`TabViewApp` is the focused multi-page settings sample; it composes nested page
+layouts from existing controls and demonstrates state preservation while
+switching pages.
 
 ## Composable layouts
 
@@ -531,6 +535,7 @@ build\Debug\ChoiceControlsApp.exe
 build\Debug\ComboBoxApp.exe
 build\Debug\ProgressBarApp.exe
 build\Debug\SliderApp.exe
+build\Debug\TabViewApp.exe
 build\Debug\ProfileManagerApp.exe
 build\Debug\MenuApp.exe
 build\Debug\DialogApp.exe
@@ -564,6 +569,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\focus_command_gui_sm
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\file_drop_gui_smoke.ps1 -Executable .\build\Debug\FileDropApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\polish_gui_smoke.ps1 -Executable .\build\Debug\PolishApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\timer_gui_smoke.ps1 -Executable .\build\Debug\TimerApp.exe -Cycles 5
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\tab_view_gui_smoke.ps1 -Executable .\build\Debug\TabViewApp.exe -Cycles 5
 ```
 
 These scripts drive the real executables and real native windows. The
@@ -968,6 +974,53 @@ and `AsSlider()` provides a narrow range/value view. Explicit stepping and
 vertical orientation are deferred; the current implementation is horizontal
 only and uses the native integer line/page behavior for keyboard interaction.
 `SliderApp` demonstrates direct Slider → `ProgressBar` and Label composition.
+
+## TabView
+
+`TabView` is a portable container control. Each `AddTab()` call returns a
+stable `TabPage` handle whose `GetLayout()` is an ordinary nested `Layout`;
+the page can therefore reuse existing controls without tab-specific classes:
+
+```cpp
+TabView tabs;
+auto general = tabs.AddTab("General");
+auto network = tabs.AddTab("Network");
+
+TextBox name("guideXOS user");
+general.GetLayout().Add(name);
+
+TextBox server("example.com");
+network.GetLayout().Add(server);
+
+tabs.OnSelectionChanged([&](std::optional<std::size_t> index) {
+    status.SetText(index ? tabs.GetTab(*index).GetTitle()
+                         : "No page selected");
+});
+
+Layout content;
+content.Add(tabs, LayoutSizing::Expand);
+window.SetContent(content);
+```
+
+The first page is selected automatically; adding later pages preserves the
+current selection. `GetSelectedIndex()` is optional: an empty TabView has no
+selection, and `SetSelectedIndex(std::nullopt)` clears selection. A nonempty
+index outside the page range throws `std::out_of_range`; assigning the
+effective current selection is a no-op. Programmatic and native user
+selection share one synchronous callback path and emit exactly one event per
+effective change. `TabViewRef` is available through
+`ControlRef::AsTabView()`, while `TabPageRef` provides stable page identity
+and title/index queries.
+
+Only the selected page is visible. Page controls remain logically owned by
+their page layouts and their model state survives switching, close/reopen,
+and native realization changes. Switching away from a focused page moves
+focus to the TabView, so hidden page controls do not continue receiving
+keyboard input. TabView expands in both layout axes, uses the native tab
+control's reported content rectangle so headers are not overlapped, supports
+UTF-8 titles and runtime page addition, and retains normal enabled/tool-tip
+control behavior. Tab removal, icons, reordering, close buttons, and custom
+tab painting are not currently supported.
 
 ## Application timers
 

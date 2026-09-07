@@ -80,6 +80,8 @@ private:
                                 const ControlState& control);
     void SynchronizeSlider(ChildBinding& binding,
                            const ControlState& control);
+    void SynchronizeTabView(ChildBinding& binding,
+                            const ControlState& control);
     void SynchronizeRadioButton(ChildBinding& binding,
                                 const ControlState& control);
     void LayoutControls(WindowBinding& binding);

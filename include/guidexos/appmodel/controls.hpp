@@ -42,6 +42,7 @@ enum class ControlType {
     ComboBox,
     ProgressBar,
     Slider,
+    TabView,
 };
 
 class TextBoxRef final {
@@ -127,6 +128,23 @@ private:
     friend class ControlRef;
 };
 
+class TabViewRef final {
+public:
+    TabViewRef() noexcept = default;
+
+    bool IsValid() const noexcept;
+    std::size_t GetTabCount() const noexcept;
+    std::optional<std::size_t> GetSelectedIndex() const noexcept;
+
+private:
+    explicit TabViewRef(std::weak_ptr<detail::ControlState> state) noexcept
+        : state_(std::move(state)) {}
+
+    std::weak_ptr<detail::ControlState> state_;
+
+    friend class ControlRef;
+};
+
 class ControlRef final {
 public:
     ControlRef() noexcept = default;
@@ -144,6 +162,7 @@ public:
     std::optional<TextAreaRef> AsTextArea() const noexcept;
     std::optional<ProgressBarRef> AsProgressBar() const noexcept;
     std::optional<SliderRef> AsSlider() const noexcept;
+    std::optional<TabViewRef> AsTabView() const noexcept;
 
     friend bool operator==(const ControlRef&, const ControlRef&) noexcept;
     friend bool operator!=(const ControlRef&, const ControlRef&) noexcept;
@@ -165,6 +184,7 @@ private:
     friend class ComboBox;
     friend class ProgressBar;
     friend class Slider;
+    friend class TabView;
 };
 
 class Label final {

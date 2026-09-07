@@ -1,6 +1,7 @@
 #include "guidexos/appmodel/layout.hpp"
 
 #include "guidexos/appmodel/controls.hpp"
+#include "guidexos/appmodel/tab_view.hpp"
 #include "runtime.hpp"
 
 #include <algorithm>
@@ -97,6 +98,10 @@ void Layout::Add(TextArea& textArea, LayoutSizing sizing) {
     AddControlToLayout(state_, textArea.state_, sizing);
 }
 
+void Layout::Add(TabView& tabView, LayoutSizing sizing) {
+    AddControlToLayout(state_, tabView.state_, sizing);
+}
+
 void Layout::Add(Layout& layout, LayoutSizing sizing) {
     if (layout.state_ == state_ || IsAncestor(layout.state_, state_)) {
         throw std::logic_error("A Layout cannot contain itself or an ancestor");
@@ -106,6 +111,9 @@ void Layout::Add(Layout& layout, LayoutSizing sizing) {
     }
     if (layout.state_->contentWindow.lock()) {
         throw std::logic_error("A realized window content Layout cannot be nested");
+    }
+    if (layout.state_->tabPage.lock()) {
+        throw std::logic_error("A TabPage Layout cannot be nested");
     }
     if (std::find_if(state_->children.begin(), state_->children.end(),
                      [&layout](const detail::LayoutItem& item) {

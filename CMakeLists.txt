@@ -17,6 +17,7 @@ add_library(guidexos_appmodel STATIC
     src/appmodel/menu.cpp
     src/appmodel/runtime.cpp
     src/appmodel/status_bar.cpp
+    src/appmodel/tab_view.cpp
     src/appmodel/timer.cpp
     src/appmodel/text_index.cpp
     src/appmodel/text_validation.cpp
@@ -159,6 +160,11 @@ add_executable(SliderApp WIN32
 )
 target_link_libraries(SliderApp PRIVATE guidexos_appmodel)
 
+add_executable(TabViewApp WIN32
+    samples/TabViewApp/main.cpp
+)
+target_link_libraries(TabViewApp PRIVATE guidexos_appmodel)
+
 if(MSVC)
     # Keep the sample's source-level entry point platform-neutral while
     # selecting the Windows GUI subsystem (and therefore no console window).
@@ -180,6 +186,7 @@ if(MSVC)
     target_link_options(TimerApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(ProgressBarApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(SliderApp PRIVATE /ENTRY:mainCRTStartup)
+    target_link_options(TabViewApp PRIVATE /ENTRY:mainCRTStartup)
 endif()
 
 if(MSVC)
@@ -201,6 +208,7 @@ if(MSVC)
     target_compile_options(TimerApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(ProgressBarApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(SliderApp PRIVATE /W4 /WX /permissive-)
+    target_compile_options(TabViewApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(profile_manager_model PRIVATE /W4 /WX /permissive-)
 else()
     target_compile_options(HelloApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -222,6 +230,7 @@ else()
     target_compile_options(TimerApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(ProgressBarApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(SliderApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(TabViewApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 add_executable(appmodel_model_test
@@ -383,6 +392,18 @@ target_link_libraries(appmodel_slider_lifecycle_test PRIVATE
     guidexos_appmodel user32 comctl32
 )
 
+add_executable(appmodel_tab_view_model_test
+    tests/tab_view_model_behavior_test.cpp
+)
+target_link_libraries(appmodel_tab_view_model_test PRIVATE guidexos_appmodel)
+
+add_executable(appmodel_tab_view_native_test
+    tests/tab_view_native_test.cpp
+)
+target_link_libraries(appmodel_tab_view_native_test PRIVATE
+    guidexos_appmodel user32 comctl32
+)
+
 if(MSVC)
     target_compile_options(appmodel_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_lifecycle_test PRIVATE /W4 /WX /permissive-)
@@ -412,6 +433,8 @@ if(MSVC)
     target_compile_options(appmodel_progress_bar_lifecycle_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_slider_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_slider_lifecycle_test PRIVATE /W4 /WX /permissive-)
+    target_compile_options(appmodel_tab_view_model_test PRIVATE /W4 /WX /permissive-)
+    target_compile_options(appmodel_tab_view_native_test PRIVATE /W4 /WX /permissive-)
 else()
     target_compile_options(appmodel_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_lifecycle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -441,6 +464,8 @@ else()
     target_compile_options(appmodel_progress_bar_lifecycle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_slider_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_slider_lifecycle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(appmodel_tab_view_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(appmodel_tab_view_native_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 enable_testing()
@@ -472,6 +497,8 @@ add_test(NAME appmodel_progress_bar_model_behavior COMMAND appmodel_progress_bar
 add_test(NAME appmodel_progress_bar_lifecycle_behavior COMMAND appmodel_progress_bar_lifecycle_test)
 add_test(NAME appmodel_slider_model_behavior COMMAND appmodel_slider_model_test)
 add_test(NAME appmodel_slider_lifecycle_behavior COMMAND appmodel_slider_lifecycle_test)
+add_test(NAME appmodel_tab_view_model_behavior COMMAND appmodel_tab_view_model_test)
+add_test(NAME appmodel_tab_view_native_behavior COMMAND appmodel_tab_view_native_test)
 
 if(WIN32)
     add_test(
@@ -642,4 +669,13 @@ if(WIN32)
             -Cycles 5
     )
     set_tests_properties(slider_gui_smoke PROPERTIES TIMEOUT 300)
+
+    add_test(
+        NAME tab_view_gui_smoke
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/tab_view_gui_smoke.ps1"
+            -Executable "$<TARGET_FILE:TabViewApp>"
+            -Cycles 5
+    )
+    set_tests_properties(tab_view_gui_smoke PROPERTIES TIMEOUT 360)
 endif()

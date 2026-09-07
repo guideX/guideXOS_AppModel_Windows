@@ -37,6 +37,14 @@ bool LayoutContainsControl(const std::shared_ptr<LayoutState>& layout,
     if (!layout || !control) return false;
     for (const auto& item : layout->children) {
         if (item.control == control) return true;
+        if (item.control && item.control->kind == ControlKind::TabView &&
+            item.control->tabView) {
+            for (const auto& page : item.control->tabView->pages) {
+                if (page && LayoutContainsControl(page->layout, control)) {
+                    return true;
+                }
+            }
+        }
         if (item.layout && LayoutContainsControl(item.layout, control)) return true;
     }
     return false;
@@ -48,6 +56,14 @@ bool LayoutContainsLayout(const std::shared_ptr<LayoutState>& layout,
     if (layout == target) return true;
     for (const auto& item : layout->children) {
         if (item.layout && LayoutContainsLayout(item.layout, target)) return true;
+        if (item.control && item.control->kind == ControlKind::TabView &&
+            item.control->tabView) {
+            for (const auto& page : item.control->tabView->pages) {
+                if (page && LayoutContainsLayout(page->layout, target)) {
+                    return true;
+                }
+            }
+        }
     }
     return false;
 }
@@ -65,7 +81,16 @@ bool IsRadioButton(const std::shared_ptr<ControlState>& control) noexcept {
 
 bool IsSelectionControl(const std::shared_ptr<ControlState>& control) noexcept {
     return control && (control->kind == ControlKind::ListBox ||
-                       control->kind == ControlKind::ComboBox);
+                       control->kind == ControlKind::ComboBox ||
+                       control->kind == ControlKind::TabView);
+}
+
+std::size_t SelectionCount(const std::shared_ptr<ControlState>& control) noexcept {
+    if (!control) return 0;
+    if (control->kind == ControlKind::TabView) {
+        return control->tabView ? control->tabView->pages.size() : 0;
+    }
+    return control->items.size();
 }
 
 int SaturatingInt(std::int64_t value) noexcept {
@@ -175,6 +200,8 @@ LayoutMeasurement NeutralControlMeasurement(const ControlState& control) {
         return {{220, 22}, {96, 22}};
     case ControlKind::Slider:
         return {{220, 32}, {96, 24}};
+    case ControlKind::TabView:
+        return {{360, 260}, {180, 120}};
     }
     return {};
 }
@@ -437,6 +464,21 @@ void ValidateLayoutBinding(const std::shared_ptr<LayoutState>& layout,
                     }
                 }
             }
+            if (item.control->kind == ControlKind::TabView &&
+                item.control->tabView) {
+                for (const auto& page : item.control->tabView->pages) {
+                    if (!page || !page->layout) {
+                        throw std::logic_error("A TabView page is invalid");
+                    }
+                    if (auto owner = page->owner.lock();
+                        owner != item.control->tabView) {
+                        throw std::logic_error("A TabView page has an invalid owner");
+                    }
+                    page->layout->tabPage = page;
+                    ValidateLayoutBinding(page->layout, application,
+                                          visiting, visited);
+                }
+            }
         } else if (item.layout) {
             if (auto parent = item.layout->parent.lock(); parent && parent != layout) {
                 throw std::logic_error("A child Layout cannot belong to multiple parents");
@@ -458,6 +500,15 @@ void ApplyLayoutBinding(const std::shared_ptr<LayoutState>& layout,
             item.control->application = application;
             if (auto group = item.control->radioGroup.lock()) {
                 group->application = application;
+            }
+            if (item.control->kind == ControlKind::TabView &&
+                item.control->tabView) {
+                for (const auto& page : item.control->tabView->pages) {
+                    if (page && page->layout) {
+                        page->layout->tabPage = page;
+                        ApplyLayoutBinding(page->layout, application);
+                    }
+                }
             }
         } else if (item.layout) {
             ApplyLayoutBinding(item.layout, application);
@@ -646,6 +697,24 @@ void CollectControls(const std::shared_ptr<LayoutState>& layout,
     }
 }
 
+void CollectAllControls(const std::shared_ptr<LayoutState>& layout,
+                        std::vector<std::shared_ptr<ControlState>>& controls) {
+    if (!layout) return;
+    for (const auto& item : layout->children) {
+        if (item.control) {
+            controls.push_back(item.control);
+            if (item.control->kind == ControlKind::TabView &&
+                item.control->tabView) {
+                for (const auto& page : item.control->tabView->pages) {
+                    if (page) CollectAllControls(page->layout, controls);
+                }
+            }
+        } else if (item.layout) {
+            CollectAllControls(item.layout, controls);
+        }
+    }
+}
+
 bool ShowWindow(const std::shared_ptr<WindowState>& window) {
     if (!window) return false;
     if (window->shown) return true;
@@ -731,6 +800,25 @@ std::shared_ptr<WindowState> FindOwningWindow(
     auto layout = control->layoutParent.lock();
     while (layout) {
         if (auto window = layout->contentWindow.lock()) return window;
+        if (auto page = layout->tabPage.lock()) {
+            if (auto owner = page->owner.lock()) {
+                if (auto tabView = owner->control.lock()) {
+                    layout = tabView->layoutParent.lock();
+                    continue;
+                }
+            }
+        }
+        layout = layout->parent.lock();
+    }
+    return nullptr;
+}
+
+std::shared_ptr<TabViewState> FindOwningTabView(
+    const std::shared_ptr<ControlState>& control) noexcept {
+    if (!control) return nullptr;
+    auto layout = control->layoutParent.lock();
+    while (layout) {
+        if (auto page = layout->tabPage.lock()) return page->owner.lock();
         layout = layout->parent.lock();
     }
     return nullptr;
@@ -961,13 +1049,28 @@ void DispatchTextChanged(const std::shared_ptr<ControlState>& control,
 void DispatchSelectionChanged(const std::shared_ptr<ControlState>& control,
                               std::optional<std::size_t> index) {
     if (!IsSelectionControl(control) ||
-        (index && *index >= control->items.size()) ||
+        (index && *index >= SelectionCount(control)) ||
         control->selectedIndex == index) {
         return;
     }
 
+    std::shared_ptr<WindowState> window;
+    std::shared_ptr<ControlState> focused;
+    const bool isTabView = control->kind == ControlKind::TabView;
+    if (isTabView) {
+        window = FindOwningWindow(control);
+        focused = window ? window->focusedControl.lock() : nullptr;
+        if (focused && focused != control &&
+            FindOwningTabView(focused) == control->tabView) {
+            ClearNativeFocus(window, focused);
+        } else {
+            focused.reset();
+        }
+    }
+
     control->selectedIndex = index;
     NotifyControlChanged(control);
+    if (focused) FocusControl(control);
     DispatchSelectionCallback(control);
 }
 

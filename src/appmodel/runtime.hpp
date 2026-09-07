@@ -33,12 +33,15 @@ enum class ControlKind {
     ProgressBar,
     Slider,
     RadioButton,
+    TabView,
 };
 
 struct ApplicationState;
 struct ControlState;
 struct RadioGroupState;
 struct LayoutState;
+struct TabPageState;
+struct TabViewState;
 struct WindowState;
 struct MenuBarState;
 struct MenuState;
@@ -88,6 +91,7 @@ struct ControlState {
     std::size_t caretIndex = 0;
     TextRange selection{};
     std::weak_ptr<LayoutState> layoutParent;
+    std::shared_ptr<TabViewState> tabView;
     std::function<void()> onClick;
     std::function<void(const std::string&)> onTextChanged;
     std::function<void(std::optional<std::size_t>)> onSelectionChanged;
@@ -123,6 +127,22 @@ struct LayoutState {
     std::weak_ptr<ApplicationState> application;
     std::weak_ptr<LayoutState> parent;
     std::weak_ptr<WindowState> contentWindow;
+    std::weak_ptr<TabPageState> tabPage;
+};
+
+struct TabPageState {
+    explicit TabPageState(std::string pageTitle,
+                          std::shared_ptr<LayoutState> pageLayout)
+        : title(std::move(pageTitle)), layout(std::move(pageLayout)) {}
+
+    std::string title;
+    std::shared_ptr<LayoutState> layout;
+    std::weak_ptr<TabViewState> owner;
+};
+
+struct TabViewState {
+    std::weak_ptr<ControlState> control;
+    std::vector<std::shared_ptr<TabPageState>> pages;
 };
 
 struct MenuItemState {
@@ -262,6 +282,8 @@ LayoutMeasurement GetLayoutMeasurement(
     const LayoutMeasurementProvider* provider = nullptr);
 void CollectControls(const std::shared_ptr<LayoutState>& layout,
                      std::vector<std::shared_ptr<ControlState>>& controls);
+void CollectAllControls(const std::shared_ptr<LayoutState>& layout,
+                        std::vector<std::shared_ptr<ControlState>>& controls);
 
 bool ShowWindow(const std::shared_ptr<WindowState>& window);
 void RequestWindowClose(const std::shared_ptr<WindowState>& window) noexcept;

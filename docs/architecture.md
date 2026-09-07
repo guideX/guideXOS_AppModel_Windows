@@ -22,7 +22,37 @@ Platform-neutral runtime state and backend contract (src/appmodel, src/platform)
           +--> Native desktop windows, controls, session clipboard, and shell file drops
 ```
 
-The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Slider`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Slider`, `TabView`, `TabPage`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+
+## TabView container boundary
+
+`TabView` is represented as one ordinary App Model control in the containing
+layout. Its private `TabViewState` owns a vector of `TabPageState` objects;
+each page owns one nested `LayoutState`. A page layout has a `tabPage` owner
+link rather than a normal layout parent, so it can contain ordinary controls
+and child layouts without becoming a second window root or requiring a
+control-ownership rewrite. Binding a containing layout to an Application
+recursively validates and binds every page layout and its controls.
+
+The Windows backend keeps one `ChildBinding` per logical control, including
+all page controls. The selected page is laid out recursively inside the
+content rectangle returned by the native tab control; inactive page children
+are hidden, not destroyed. The logical `ControlState` remains authoritative,
+so text, range, selection, enabled state, and callbacks survive page changes
+and close/reopen. `TabView` selection changes use the same model-first,
+duplicate-suppressing dispatch rules as ListBox and ComboBox. When selection
+changes, a focused child of the old page is cleared and focus moves to the
+TabView host before the application callback runs.
+
+The native boundary is private to `src/platform/windows`: `WC_TABCONTROLW`,
+`TCITEMW`, `TCM_*`, `TCN_SELCHANGE`, and `WM_NOTIFY` are used only for
+realization and routing. Parent notification routing identifies the source
+TabView from its `HWND` binding, so multiple TabViews and windows remain
+isolated. `TabCtrl_AdjustRect` supplies the actual page rectangle after
+initial realization and resize; no fixed header height is part of the public
+or layout model. Runtime tab addition rebuilds only the affected native
+children when page content changes and preserves the current selection.
+Tab removal is intentionally deferred.
 
 ## Process-wide text clipboard
 
@@ -823,6 +853,17 @@ duplicate notification suppression, enabled state, callback-driven close, and
 native recreation. `slider_gui_smoke.ps1` drives five Debug and five Release
 SliderApp cycles covering initial composition, focus, Right/Left/Home/End
 keyboard changes, Reset, ProgressBar/Label synchronization, and clean exit.
+`appmodel_tab_view_model_test` covers page creation and titles, UTF-8,
+selection defaults and clearing, duplicate-event suppression, invalid indexes,
+callback replacement/removal, reentrant callbacks, page layout ownership,
+enabled state, focused-page transitions, close/reopen, and callback-driven
+window close. `appmodel_tab_view_native_test` covers native tab creation and
+titles, selected-page visibility, TabCtrl_AdjustRect content placement, focus
+transfer, WM_NOTIFY selection routing, runtime page/control/title mutation,
+multiple windows, and native recreation. `tab_view_gui_smoke.ps1` drives five
+Debug and five Release TabViewApp cycles covering keyboard page navigation,
+page-specific text and slider/progress state, diagnostics actions, resize,
+close/reopen, and process cleanup.
 `profile_manager_model_test` covers serialization/deserialization, Unicode,
 newlines, duplicate names, all modes and enabled states, version and malformed
 input rejection, parser bounds, parse-failure isolation, dirty transitions,

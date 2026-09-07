@@ -17,6 +17,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -33,7 +35,7 @@ bool InitializeCommonControls() noexcept {
     std::call_once(once, []() noexcept {
         INITCOMMONCONTROLSEX initialization{};
         initialization.dwSize = sizeof(initialization);
-        initialization.dwICC = ICC_BAR_CLASSES;
+        initialization.dwICC = ICC_BAR_CLASSES | ICC_TAB_CLASSES;
         initialized = InitCommonControlsEx(&initialization) != FALSE;
     });
     return initialized;
@@ -648,6 +650,8 @@ public:
                 return {{220, 22}, {96, 22}};
             case ControlKind::Slider:
                 return {{220, 32}, {96, 24}};
+            case ControlKind::TabView:
+                return {{360, 260}, {180, 120}};
             }
         } catch (...) {
             // Native realization is an optimization. A valid neutral
@@ -671,6 +675,7 @@ struct WindowsBackend::ChildBinding {
     bool synchronizingSelection{false};
     bool synchronizingCheck{false};
     bool synchronizingSlider{false};
+    bool synchronizingTabSelection{false};
     bool nativeReadOnly{false};
     bool nativeWordWrap{true};
     std::vector<std::string> nativeItems;
@@ -772,7 +777,7 @@ void WindowsBackend::RebuildToolTips(WindowBinding& binding) {
     }
 
     std::vector<std::shared_ptr<ControlState>> controls;
-    CollectControls(binding.model->content, controls);
+    CollectAllControls(binding.model->content, controls);
     bool hasToolTips = false;
     for (const auto& control : controls) {
         if (control && !control->toolTip.empty()) {
@@ -1092,7 +1097,8 @@ bool WindowsBackend::FocusControl(
     for (const auto& child : binding->children) {
         if (child.model.lock() != control || !child.hwnd ||
             IsWindow(child.hwnd) == FALSE ||
-            IsWindowEnabled(child.hwnd) == FALSE) {
+            IsWindowEnabled(child.hwnd) == FALSE ||
+            IsWindowVisible(child.hwnd) == FALSE) {
             continue;
         }
         SetActiveWindow(binding->hwnd);
@@ -1127,7 +1133,7 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
 
         const auto content = window->content;
         std::vector<std::shared_ptr<ControlState>> controls;
-        CollectControls(content, controls);
+        CollectAllControls(content, controls);
         bool rebuild = binding->children.size() != controls.size();
         if (!rebuild) {
             for (std::size_t index = 0; index < controls.size(); ++index) {
@@ -1167,6 +1173,10 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
             }
             if (control->kind == ControlKind::Slider) {
                 SynchronizeSlider(current->children[index], *control);
+                continue;
+            }
+            if (control->kind == ControlKind::TabView) {
+                SynchronizeTabView(current->children[index], *control);
                 continue;
             }
             if (control->kind == ControlKind::CheckBox) {
@@ -1299,7 +1309,7 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
     const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     std::shared_ptr<RadioGroupState> previousRadioGroup;
     std::vector<std::shared_ptr<ControlState>> controls;
-    CollectControls(binding.model->content, controls);
+    CollectAllControls(binding.model->content, controls);
     for (const auto& control : controls) {
         if (!control) continue;
 
@@ -1312,8 +1322,10 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         const bool isProgressBar = control->kind == ControlKind::ProgressBar;
         const bool isSlider = control->kind == ControlKind::Slider;
         const bool isRadioButton = control->kind == ControlKind::RadioButton;
+        const bool isTabView = control->kind == ControlKind::TabView;
         const bool isInteractive = isButton || isCheckBox || isTextBox ||
-            isTextArea || isListBox || isComboBox || isRadioButton || isSlider;
+            isTextArea || isListBox || isComboBox || isRadioButton || isSlider ||
+            isTabView;
         DWORD style = WS_CHILD | WS_VISIBLE |
             (isInteractive ? WS_TABSTOP : (isProgressBar ? 0 : SS_LEFT)) |
             (isCheckBox ? BS_AUTOCHECKBOX | BS_LEFT | BS_VCENTER : 0) |
@@ -1327,7 +1339,8 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             (isComboBox ? CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_AUTOHSCROLL |
                          WS_VSCROLL : 0) |
             (isProgressBar ? PBS_MARQUEE : 0) |
-            (isSlider ? TBS_HORZ : 0);
+            (isSlider ? TBS_HORZ : 0) |
+            (isTabView ? TCS_TABS : 0);
         if (isRadioButton) {
             const auto group = control->radioGroup.lock();
             if (group != previousRadioGroup) style |= WS_GROUP;
@@ -1352,6 +1365,8 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             nativeClass = PROGRESS_CLASSW;
         } else if (isSlider) {
             nativeClass = TRACKBAR_CLASSW;
+        } else if (isTabView) {
+            nativeClass = WC_TABCONTROLW;
         }
         HWND child = CreateWindowExW(
             isTextBox || isTextArea || isListBox ? WS_EX_CLIENTEDGE : 0,
@@ -1635,6 +1650,30 @@ void WindowsBackend::SynchronizeSlider(ChildBinding& binding,
     binding.synchronizingSlider = previous;
 }
 
+void WindowsBackend::SynchronizeTabView(ChildBinding& binding,
+                                        const ControlState& control) {
+    if (control.kind != ControlKind::TabView || !control.tabView) return;
+
+    const bool previous = binding.synchronizingTabSelection;
+    binding.synchronizingTabSelection = true;
+    TabCtrl_DeleteAllItems(binding.hwnd);
+    for (const auto& page : control.tabView->pages) {
+        if (!page) continue;
+        const std::wstring title = Utf8ToWide(page->title);
+        TCITEMW item{};
+        item.mask = TCIF_TEXT;
+        item.pszText = const_cast<wchar_t*>(title.c_str());
+        TabCtrl_InsertItem(binding.hwnd,
+                           TabCtrl_GetItemCount(binding.hwnd), &item);
+    }
+    const int desiredSelection = control.selectedIndex
+        ? static_cast<int>(*control.selectedIndex) : -1;
+    if (TabCtrl_GetCurSel(binding.hwnd) != desiredSelection) {
+        TabCtrl_SetCurSel(binding.hwnd, desiredSelection);
+    }
+    binding.synchronizingTabSelection = previous;
+}
+
 void WindowsBackend::SynchronizeRadioButton(ChildBinding& binding,
                                             const ControlState& control) {
     const LRESULT nativeSelected = SendMessageW(binding.hwnd, BM_GETCHECK, 0, 0);
@@ -1671,16 +1710,64 @@ void WindowsBackend::LayoutControls(WindowBinding& binding) {
             }
             return HWND{};
         });
-    const auto placements = CalculateControlPlacements(
-        binding.model->content, LayoutRect{0, 0, clientWidth, contentHeight},
-        &measurementProvider);
-    const std::size_t count = std::min(binding.children.size(), placements.size());
-    for (std::size_t index = 0; index < count; ++index) {
-        const auto& rectangle = placements[index].bounds;
-        MoveWindow(binding.children[index].hwnd,
-                   rectangle.x, rectangle.y,
+    std::unordered_map<const ControlState*, LayoutRect> placements;
+    std::unordered_set<const ControlState*> visible;
+    std::function<void(const std::shared_ptr<LayoutState>&, LayoutRect)> placeLayout;
+    placeLayout = [&](const std::shared_ptr<LayoutState>& layout,
+                      LayoutRect bounds) {
+        const auto direct = CalculateControlPlacements(
+            layout, bounds, &measurementProvider);
+        for (const auto& placement : direct) {
+            if (!placement.control) continue;
+            const auto* key = placement.control.get();
+            placements[key] = placement.bounds;
+            visible.insert(key);
+
+            if (placement.control->kind != ControlKind::TabView ||
+                !placement.control->tabView || !placement.control->selectedIndex ||
+                *placement.control->selectedIndex >=
+                    placement.control->tabView->pages.size()) {
+                continue;
+            }
+
+            HWND tab = nullptr;
+            for (const auto& child : binding.children) {
+                if (child.model.lock() == placement.control) {
+                    tab = child.hwnd;
+                    break;
+                }
+            }
+            RECT pageRect{0, 0, std::max(0, placement.bounds.width),
+                          std::max(0, placement.bounds.height)};
+            if (!tab) continue;
+            TabCtrl_AdjustRect(tab, FALSE, &pageRect);
+            const auto& page = placement.control->tabView->pages[
+                *placement.control->selectedIndex];
+            if (!page) continue;
+            placeLayout(page->layout,
+                        LayoutRect{placement.bounds.x + pageRect.left,
+                                   placement.bounds.y + pageRect.top,
+                                   std::max(0L, pageRect.right - pageRect.left),
+                                   std::max(0L, pageRect.bottom - pageRect.top)});
+        }
+    };
+    placeLayout(binding.model->content,
+                LayoutRect{0, 0, clientWidth, contentHeight});
+
+    for (const auto& child : binding.children) {
+        const auto control = child.model.lock();
+        if (!control || !child.hwnd) continue;
+        const auto placement = placements.find(control.get());
+        if (placement == placements.end() || visible.find(control.get()) ==
+            visible.end()) {
+            ::ShowWindow(child.hwnd, SW_HIDE);
+            continue;
+        }
+        const auto& rectangle = placement->second;
+        MoveWindow(child.hwnd, rectangle.x, rectangle.y,
                    std::max(0, rectangle.width),
                    std::max(0, rectangle.height), TRUE);
+        ::ShowWindow(child.hwnd, SW_SHOW);
     }
     if (binding.toolTip) {
         for (const auto& tool : binding.toolTips) {
@@ -2018,6 +2105,39 @@ LRESULT WindowsBackend::HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
             }
         }
         return 0;
+    case WM_NOTIFY:
+        if (binding) {
+            const auto* header = reinterpret_cast<const NMHDR*>(lParam);
+            if (header && header->code == TCN_SELCHANGE) {
+                for (const auto& childBinding : binding->children) {
+                    if (childBinding.hwnd != header->hwndFrom) continue;
+                    const auto control = childBinding.model.lock();
+                    if (!control || control->kind != ControlKind::TabView ||
+                        childBinding.synchronizingTabSelection ||
+                        !control->enabled ||
+                        IsWindowEnabled(childBinding.hwnd) == FALSE) {
+                        return 0;
+                    }
+                    try {
+                        const int nativeSelection =
+                            TabCtrl_GetCurSel(childBinding.hwnd);
+                        std::optional<std::size_t> selection;
+                        if (nativeSelection >= 0 && control->tabView &&
+                            static_cast<std::size_t>(nativeSelection) <
+                                control->tabView->pages.size()) {
+                            selection = static_cast<std::size_t>(nativeSelection);
+                        }
+                        DispatchSelectionChanged(control, selection);
+                    } catch (const std::exception&) {
+                        RequestQuit(-1);
+                    } catch (...) {
+                        RequestQuit(-1);
+                    }
+                    return 0;
+                }
+            }
+        }
+        break;
     case WM_COMMAND:
         if (binding) {
             const UINT commandId = LOWORD(static_cast<DWORD>(wParam));
