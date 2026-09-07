@@ -1,6 +1,6 @@
 # guideXOS App Model for Windows
 
-This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
+This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, horizontal `Slider`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
 
 ## Current milestone
 
@@ -20,6 +20,7 @@ The current vertical slice demonstrates:
 - non-editable single-selection combo boxes with UTF-8 items, drop-down interaction, and selection callbacks
 - native-backed checkboxes and explicitly grouped radio buttons
 - portable determinate and indeterminate progress bars with clamped integer ranges
+- portable horizontal sliders with signed clamped integer ranges and user-change callbacks
 - deterministic choice callbacks across reentrancy, multiple windows, and close/reopen
 - nested vertical and horizontal layouts with natural, expanding, and spacer items
 - platform-neutral spacing, padding, geometry calculation, and deterministic resize behavior
@@ -55,6 +56,8 @@ resize sample.
 `ComboBoxApp` is the focused non-editable drop-down, mutation, and measurement sample.
 `ProgressBarApp` is the focused determinate/indeterminate progress sample; it
 uses the portable `Timer` to drive dynamic updates.
+`SliderApp` is the focused horizontal Slider sample; it composes a Slider,
+ProgressBar, Label, Button, and Layout without native application code.
 `MenuApp` is the focused hierarchical menu, command, shortcut, mnemonic, and
 window-chrome sample. `DialogApp` is the focused native message-dialog and
 single-file picker sample; it does not read or write files. `MultiWindowApp` also includes identical per-window
@@ -227,7 +230,7 @@ code.
 
 ToolTips are a shared control property. The supported controls are `Button`,
 `TextBox`, `TextArea`, `ListBox`, `CheckBox`, `RadioButton`, `ComboBox`, and
-`ProgressBar`; `Label` also
+`ProgressBar`, and `Slider`; `Label` also
 supports the same property. Text is UTF-8, empty text clears it, invalid UTF-8
 throws `std::invalid_argument`, and a tooltip is limited to 8 KiB. ToolTip text
 does not participate in measurement or layout.
@@ -527,6 +530,7 @@ build\Debug\ListBoxApp.exe
 build\Debug\ChoiceControlsApp.exe
 build\Debug\ComboBoxApp.exe
 build\Debug\ProgressBarApp.exe
+build\Debug\SliderApp.exe
 build\Debug\ProfileManagerApp.exe
 build\Debug\MenuApp.exe
 build\Debug\DialogApp.exe
@@ -549,6 +553,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\listbox_gui_smoke.ps
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\choice_controls_gui_smoke.ps1 -Executable .\build\Debug\ChoiceControlsApp.exe -Cycles 3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\combobox_gui_smoke.ps1 -Executable .\build\Debug\ComboBoxApp.exe -Cycles 3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\progress_bar_gui_smoke.ps1 -Executable .\build\Debug\ProgressBarApp.exe -Cycles 5
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\slider_gui_smoke.ps1 -Executable .\build\Debug\SliderApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\profile_manager_gui_smoke.ps1 -Executable .\build\Debug\ProfileManagerApp.exe -Cycles 3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\profile_manager_close_gui_smoke.ps1 -Executable .\build\Debug\ProfileManagerApp.exe -Cycles 3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\menu_gui_smoke.ps1 -Executable .\build\Debug\MenuApp.exe -Cycles 3
@@ -879,7 +884,7 @@ For an A-to-B selection, the group index and both member states are updated atom
 
 `RadioGroup` and all its members must belong to one `Application`. A group cannot be used across applications. Independent groups remain independent even when their controls share a window or appear in different windows. Closing a window detaches native realizations but retains text, enabled state, selection, membership, and callbacks; reopening creates fresh native controls without initial selection events.
 
-`Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, and `ProgressBar` expose `SetEnabled(bool)` and `IsEnabled()`. Disabled native controls reject native interaction. Programmatic model mutations remain allowed, including `Button::Click`, text/item changes, list/combo selection, checkbox state, radio-group selection, and progress range/value changes. Labels do not currently expose enabled state.
+`Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `ProgressBar`, and `Slider` expose `SetEnabled(bool)` and `IsEnabled()`. Disabled native controls reject native interaction. Programmatic model mutations remain allowed, including `Button::Click`, text/item changes, list/combo selection, checkbox state, radio-group selection, and progress/slider range/value changes. Labels do not currently expose enabled state.
 
 Choice controls receive the normal vertical layout height, stretch horizontally, and participate in creation-order Tab navigation. Native buttons provide mouse activation, Space activation, focus, and standard radio arrow behavior where the native group segment permits it; the App Model `RadioGroup` remains authoritative and refreshes every realization after a selection.
 
@@ -925,6 +930,45 @@ the checkbox switches determinate and indeterminate presentation. Application
 code does not call Windows APIs, and the native bar does not embed percentage
 text; the sample uses a separate label.
 
+## Slider
+
+`Slider` is a horizontal, focusable control for bounded integer input. Its
+default range is `0..100`, its default value is `0`, and it accepts signed
+minimums and maximums.
+
+```cpp
+Slider volume;
+volume.SetMinimum(0);
+volume.SetMaximum(100);
+volume.SetValue(50);
+
+volume.OnChanged([&]() {
+    volumeLabel.SetText(std::to_string(volume.GetValue()));
+});
+```
+
+The model preserves `minimum <= value <= maximum`. `SetValue()` clamps to the
+range. Endpoint setters clamp a crossing endpoint to the other endpoint and
+clamp the current value into the resulting range, matching `ProgressBar`.
+Zero-width and signed ranges are valid. The model remains authoritative before
+realization, after realization, and across close/reopen.
+
+Programmatic and user-originated value changes share one synchronous
+`OnChanged()` path. A callback runs after the model value is current; assigning
+the effective current value emits no event. Native mouse clicks, thumb drags,
+arrow keys, Page Up/Page Down, Home, and End are routed through the private
+Windows trackbar and produce at most one logical callback per effective value.
+Reentrant callbacks may change the value or enabled state, update other
+controls, or close the containing window. The callback is copied at each
+dispatch boundary and is cleared when the public Slider is destroyed.
+
+`Slider` participates in `Layout`, expands horizontally, and has a non-zero
+natural/minimum height. `ControlRef::GetType()` reports `ControlType::Slider`,
+and `AsSlider()` provides a narrow range/value view. Explicit stepping and
+vertical orientation are deferred; the current implementation is horizontal
+only and uses the native integer line/page behavior for keyboard interaction.
+`SliderApp` demonstrates direct Slider → `ProgressBar` and Label composition.
+
 ## Application timers
 
 `Timer` is a repeating, application-owned event source. It uses only
@@ -963,6 +1007,7 @@ coalesce very short intervals, so `Timer` is not a real-time scheduler.
 - `ComboBox::OnSelectionChanged` replaces the prior callback. Destroying a `ComboBox` clears its stored callback even if a layout still retains its model state.
 - `CheckBox::OnCheckedChanged` and `RadioButton::OnSelectedChanged` replace their prior callbacks. Destroying a choice control clears its callback even if a layout retains its model state.
 - `ProgressBar` retains its range, value, indeterminate state, and enabled state across native detachment; its `ControlRef` remains safe while the layout retains the model state.
+- `Slider::OnChanged` replaces the prior callback. Destroying a Slider clears its callback even if a layout retains its model state; its signed range, value, and enabled state remain retained across native detachment.
 - `RadioGroup` retains weak membership links and rejects duplicate or cross-group membership. It must not be inferred from visual adjacency or creation order.
 - Callbacks run synchronously on the creating/UI thread. A callback may close its own window, close another window, open or reopen a window, and update a control in another live window. These operations have deterministic state transitions; native dispatch does not retain an iterator across the callback.
 - `Window::Close()` is idempotent. Model reads, writes, and programmatic `Button::Click()` remain ordinary C++ operations after a window closes. `Show()` returns `false` after application shutdown.

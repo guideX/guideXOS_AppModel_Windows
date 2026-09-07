@@ -154,6 +154,11 @@ add_executable(ProgressBarApp WIN32
 )
 target_link_libraries(ProgressBarApp PRIVATE guidexos_appmodel)
 
+add_executable(SliderApp WIN32
+    samples/SliderApp/main.cpp
+)
+target_link_libraries(SliderApp PRIVATE guidexos_appmodel)
+
 if(MSVC)
     # Keep the sample's source-level entry point platform-neutral while
     # selecting the Windows GUI subsystem (and therefore no console window).
@@ -174,6 +179,7 @@ if(MSVC)
     target_link_options(PolishApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(TimerApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(ProgressBarApp PRIVATE /ENTRY:mainCRTStartup)
+    target_link_options(SliderApp PRIVATE /ENTRY:mainCRTStartup)
 endif()
 
 if(MSVC)
@@ -194,6 +200,7 @@ if(MSVC)
     target_compile_options(PolishApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(TimerApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(ProgressBarApp PRIVATE /W4 /WX /permissive-)
+    target_compile_options(SliderApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(profile_manager_model PRIVATE /W4 /WX /permissive-)
 else()
     target_compile_options(HelloApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -214,6 +221,7 @@ else()
     target_compile_options(profile_manager_model PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(TimerApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(ProgressBarApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(SliderApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 add_executable(appmodel_model_test
@@ -363,6 +371,18 @@ target_link_libraries(appmodel_progress_bar_lifecycle_test PRIVATE
     guidexos_appmodel user32 comctl32
 )
 
+add_executable(appmodel_slider_model_test
+    tests/slider_model_behavior_test.cpp
+)
+target_link_libraries(appmodel_slider_model_test PRIVATE guidexos_appmodel)
+
+add_executable(appmodel_slider_lifecycle_test
+    tests/slider_lifecycle_behavior_test.cpp
+)
+target_link_libraries(appmodel_slider_lifecycle_test PRIVATE
+    guidexos_appmodel user32 comctl32
+)
+
 if(MSVC)
     target_compile_options(appmodel_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_lifecycle_test PRIVATE /W4 /WX /permissive-)
@@ -390,6 +410,8 @@ if(MSVC)
     target_compile_options(appmodel_timer_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_progress_bar_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_progress_bar_lifecycle_test PRIVATE /W4 /WX /permissive-)
+    target_compile_options(appmodel_slider_model_test PRIVATE /W4 /WX /permissive-)
+    target_compile_options(appmodel_slider_lifecycle_test PRIVATE /W4 /WX /permissive-)
 else()
     target_compile_options(appmodel_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_lifecycle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -417,6 +439,8 @@ else()
     target_compile_options(appmodel_timer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_progress_bar_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_progress_bar_lifecycle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(appmodel_slider_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(appmodel_slider_lifecycle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 enable_testing()
@@ -446,6 +470,8 @@ add_test(NAME appmodel_tooltip_statusbar_behavior COMMAND appmodel_tooltip_statu
 add_test(NAME appmodel_timer_behavior COMMAND appmodel_timer_test)
 add_test(NAME appmodel_progress_bar_model_behavior COMMAND appmodel_progress_bar_model_test)
 add_test(NAME appmodel_progress_bar_lifecycle_behavior COMMAND appmodel_progress_bar_lifecycle_test)
+add_test(NAME appmodel_slider_model_behavior COMMAND appmodel_slider_model_test)
+add_test(NAME appmodel_slider_lifecycle_behavior COMMAND appmodel_slider_lifecycle_test)
 
 if(WIN32)
     add_test(
@@ -607,4 +633,13 @@ if(WIN32)
             -Cycles 5
     )
     set_tests_properties(progress_bar_gui_smoke PROPERTIES TIMEOUT 300)
+
+    add_test(
+        NAME slider_gui_smoke
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/slider_gui_smoke.ps1"
+            -Executable "$<TARGET_FILE:SliderApp>"
+            -Cycles 5
+    )
+    set_tests_properties(slider_gui_smoke PROPERTIES TIMEOUT 300)
 endif()

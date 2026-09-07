@@ -13,6 +13,7 @@ class Label;
 class ListBox;
 class ProgressBar;
 class RadioButton;
+class Slider;
 class TextArea;
 class TextBox;
 
@@ -71,6 +72,7 @@ public:
     void Add(ListBox& listBox, LayoutSizing sizing = LayoutSizing::Expand);
     void Add(ProgressBar& progressBar,
              LayoutSizing sizing = LayoutSizing::Natural);
+    void Add(Slider& slider, LayoutSizing sizing = LayoutSizing::Natural);
     void Add(RadioButton& radioButton,
              LayoutSizing sizing = LayoutSizing::Natural);
     void Add(TextBox& textBox, LayoutSizing sizing = LayoutSizing::Natural);

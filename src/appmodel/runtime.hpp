@@ -31,6 +31,7 @@ enum class ControlKind {
     ListBox,
     ComboBox,
     ProgressBar,
+    Slider,
     RadioButton,
 };
 
@@ -92,6 +93,7 @@ struct ControlState {
     std::function<void(std::optional<std::size_t>)> onSelectionChanged;
     std::function<void(bool)> onCheckedChanged;
     std::function<void(bool)> onSelectedChanged;
+    std::function<void()> onChanged;
     std::weak_ptr<RadioGroupState> radioGroup;
     std::weak_ptr<ApplicationState> application;
     std::weak_ptr<WindowState> focusedWindow;
@@ -303,6 +305,8 @@ void DispatchSelectionChanged(const std::shared_ptr<ControlState>& control,
 void DispatchSelectionCallback(const std::shared_ptr<ControlState>& control);
 void DispatchCheckedChanged(const std::shared_ptr<ControlState>& control,
                             bool checked);
+void DispatchSliderChanged(const std::shared_ptr<ControlState>& control,
+                           int value);
 void DispatchRadioSelection(const std::shared_ptr<ControlState>& control);
 void DispatchRadioSelectionChanged(const std::shared_ptr<ControlState>& control,
                                    bool selected);

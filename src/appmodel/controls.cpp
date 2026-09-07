@@ -18,6 +18,18 @@ namespace {
 
 constexpr std::size_t kMaximumToolTipBytes = 8U * 1024U;
 
+int NormalizeMinimum(int minimum, int maximum) noexcept {
+    return std::min(minimum, maximum);
+}
+
+int NormalizeMaximum(int maximum, int minimum) noexcept {
+    return std::max(maximum, minimum);
+}
+
+int ClampValue(int value, int minimum, int maximum) noexcept {
+    return std::clamp(value, minimum, maximum);
+}
+
 void SetControlToolTip(const std::shared_ptr<detail::ControlState>& state,
                        std::string text) {
     ValidateUtf8(text);
@@ -112,6 +124,15 @@ std::shared_ptr<detail::ControlState> LockProgressBar(
     return state;
 }
 
+std::shared_ptr<detail::ControlState> LockSlider(
+    const std::weak_ptr<detail::ControlState>& weakState) noexcept {
+    auto state = weakState.lock();
+    if (!state || state->kind != detail::ControlKind::Slider) {
+        return nullptr;
+    }
+    return state;
+}
+
 ControlType GetControlType(detail::ControlKind kind) noexcept {
     switch (kind) {
     case detail::ControlKind::Label: return ControlType::Label;
@@ -123,6 +144,7 @@ ControlType GetControlType(detail::ControlKind kind) noexcept {
     case detail::ControlKind::RadioButton: return ControlType::RadioButton;
     case detail::ControlKind::ComboBox: return ControlType::ComboBox;
     case detail::ControlKind::ProgressBar: return ControlType::ProgressBar;
+    case detail::ControlKind::Slider: return ControlType::Slider;
     }
     return ControlType::None;
 }
@@ -211,6 +233,25 @@ int ProgressBarRef::GetValue() const noexcept {
 bool ProgressBarRef::IsIndeterminate() const noexcept {
     const auto state = LockProgressBar(state_);
     return state && state->indeterminate;
+}
+
+bool SliderRef::IsValid() const noexcept {
+    return static_cast<bool>(LockSlider(state_));
+}
+
+int SliderRef::GetMinimum() const noexcept {
+    const auto state = LockSlider(state_);
+    return state ? state->minimum : 0;
+}
+
+int SliderRef::GetMaximum() const noexcept {
+    const auto state = LockSlider(state_);
+    return state ? state->maximum : 0;
+}
+
+int SliderRef::GetValue() const noexcept {
+    const auto state = LockSlider(state_);
+    return state ? state->value : 0;
 }
 
 bool TextAreaRef::HasSelection() const noexcept {
@@ -306,6 +347,14 @@ std::optional<ProgressBarRef> ControlRef::AsProgressBar() const noexcept {
         return std::nullopt;
     }
     return ProgressBarRef{state};
+}
+
+std::optional<SliderRef> ControlRef::AsSlider() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::Slider) {
+        return std::nullopt;
+    }
+    return SliderRef{state};
 }
 
 bool operator==(const ControlRef& left, const ControlRef& right) noexcept {
@@ -936,7 +985,7 @@ ProgressBar::ProgressBar()
 ProgressBar::~ProgressBar() = default;
 
 void ProgressBar::SetMinimum(int minimum) {
-    const int nextMinimum = std::min(minimum, state_->maximum);
+    const int nextMinimum = NormalizeMinimum(minimum, state_->maximum);
     const int nextValue = std::max(state_->value, nextMinimum);
     if (state_->minimum == nextMinimum && state_->value == nextValue) return;
     state_->minimum = nextMinimum;
@@ -949,7 +998,7 @@ int ProgressBar::GetMinimum() const noexcept {
 }
 
 void ProgressBar::SetMaximum(int maximum) {
-    const int nextMaximum = std::max(maximum, state_->minimum);
+    const int nextMaximum = NormalizeMaximum(maximum, state_->minimum);
     const int nextValue = std::min(state_->value, nextMaximum);
     if (state_->maximum == nextMaximum && state_->value == nextValue) return;
     state_->maximum = nextMaximum;
@@ -962,7 +1011,7 @@ int ProgressBar::GetMaximum() const noexcept {
 }
 
 void ProgressBar::SetValue(int value) {
-    const int nextValue = std::clamp(value, state_->minimum, state_->maximum);
+    const int nextValue = ClampValue(value, state_->minimum, state_->maximum);
     if (state_->value == nextValue) return;
     state_->value = nextValue;
     detail::NotifyControlChanged(state_);
@@ -1002,6 +1051,91 @@ void ProgressBar::SetEnabled(bool enabled) {
 
 bool ProgressBar::IsEnabled() const noexcept {
     return state_->enabled;
+}
+
+Slider::Slider()
+    : state_(std::make_shared<detail::ControlState>(
+          detail::ControlKind::Slider, std::string{})) {}
+
+Slider::~Slider() {
+    state_->onChanged = {};
+}
+
+void Slider::SetMinimum(int minimum) {
+    const int nextMinimum = NormalizeMinimum(minimum, state_->maximum);
+    const int nextValue = std::max(state_->value, nextMinimum);
+    const bool rangeChanged = state_->minimum != nextMinimum;
+    const bool valueChanged = state_->value != nextValue;
+    if (!rangeChanged && !valueChanged) return;
+
+    state_->minimum = nextMinimum;
+    if (valueChanged) {
+        detail::DispatchSliderChanged(state_, nextValue);
+    } else {
+        detail::NotifyControlChanged(state_);
+    }
+}
+
+int Slider::GetMinimum() const noexcept {
+    return state_->minimum;
+}
+
+void Slider::SetMaximum(int maximum) {
+    const int nextMaximum = NormalizeMaximum(maximum, state_->minimum);
+    const int nextValue = std::min(state_->value, nextMaximum);
+    const bool rangeChanged = state_->maximum != nextMaximum;
+    const bool valueChanged = state_->value != nextValue;
+    if (!rangeChanged && !valueChanged) return;
+
+    state_->maximum = nextMaximum;
+    if (valueChanged) {
+        detail::DispatchSliderChanged(state_, nextValue);
+    } else {
+        detail::NotifyControlChanged(state_);
+    }
+}
+
+int Slider::GetMaximum() const noexcept {
+    return state_->maximum;
+}
+
+void Slider::SetValue(int value) {
+    detail::DispatchSliderChanged(
+        state_, ClampValue(value, state_->minimum, state_->maximum));
+}
+
+int Slider::GetValue() const noexcept {
+    return state_->value;
+}
+
+void Slider::SetToolTip(std::string text) {
+    SetControlToolTip(state_, std::move(text));
+}
+
+const std::string& Slider::GetToolTip() const noexcept {
+    return state_->toolTip;
+}
+
+ControlRef Slider::GetControlRef() const noexcept {
+    return ControlRef{state_};
+}
+
+bool Slider::Focus() const noexcept {
+    return detail::FocusControl(state_);
+}
+
+void Slider::SetEnabled(bool enabled) {
+    if (state_->enabled == enabled) return;
+    state_->enabled = enabled;
+    detail::NotifyControlChanged(state_);
+}
+
+bool Slider::IsEnabled() const noexcept {
+    return state_->enabled;
+}
+
+void Slider::OnChanged(std::function<void()> callback) {
+    state_->onChanged = std::move(callback);
 }
 
 CheckBox::CheckBox(std::string text, bool checked)

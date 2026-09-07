@@ -81,6 +81,10 @@ void Layout::Add(ProgressBar& progressBar, LayoutSizing sizing) {
     AddControlToLayout(state_, progressBar.state_, sizing);
 }
 
+void Layout::Add(Slider& slider, LayoutSizing sizing) {
+    AddControlToLayout(state_, slider.state_, sizing);
+}
+
 void Layout::Add(RadioButton& radioButton, LayoutSizing sizing) {
     AddControlToLayout(state_, radioButton.state_, sizing);
 }

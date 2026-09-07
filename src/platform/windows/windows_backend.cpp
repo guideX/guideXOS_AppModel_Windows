@@ -646,6 +646,8 @@ public:
             }
             case ControlKind::ProgressBar:
                 return {{220, 22}, {96, 22}};
+            case ControlKind::Slider:
+                return {{220, 32}, {96, 24}};
             }
         } catch (...) {
             // Native realization is an optimization. A valid neutral
@@ -668,6 +670,7 @@ struct WindowsBackend::ChildBinding {
     bool synchronizingText{false};
     bool synchronizingSelection{false};
     bool synchronizingCheck{false};
+    bool synchronizingSlider{false};
     bool nativeReadOnly{false};
     bool nativeWordWrap{true};
     std::vector<std::string> nativeItems;
@@ -1162,6 +1165,10 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
                 SynchronizeProgressBar(current->children[index], *control);
                 continue;
             }
+            if (control->kind == ControlKind::Slider) {
+                SynchronizeSlider(current->children[index], *control);
+                continue;
+            }
             if (control->kind == ControlKind::CheckBox) {
                 SynchronizeCheckBox(current->children[index], *control);
             } else if (control->kind == ControlKind::RadioButton) {
@@ -1303,9 +1310,10 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         const bool isListBox = control->kind == ControlKind::ListBox;
         const bool isComboBox = control->kind == ControlKind::ComboBox;
         const bool isProgressBar = control->kind == ControlKind::ProgressBar;
+        const bool isSlider = control->kind == ControlKind::Slider;
         const bool isRadioButton = control->kind == ControlKind::RadioButton;
         const bool isInteractive = isButton || isCheckBox || isTextBox ||
-            isTextArea || isListBox || isComboBox || isRadioButton;
+            isTextArea || isListBox || isComboBox || isRadioButton || isSlider;
         DWORD style = WS_CHILD | WS_VISIBLE |
             (isInteractive ? WS_TABSTOP : (isProgressBar ? 0 : SS_LEFT)) |
             (isCheckBox ? BS_AUTOCHECKBOX | BS_LEFT | BS_VCENTER : 0) |
@@ -1318,7 +1326,8 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             (isListBox ? LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL : 0) |
             (isComboBox ? CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_AUTOHSCROLL |
                          WS_VSCROLL : 0) |
-            (isProgressBar ? PBS_MARQUEE : 0);
+            (isProgressBar ? PBS_MARQUEE : 0) |
+            (isSlider ? TBS_HORZ : 0);
         if (isRadioButton) {
             const auto group = control->radioGroup.lock();
             if (group != previousRadioGroup) style |= WS_GROUP;
@@ -1330,14 +1339,23 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         const int commandId = isButton || isCheckBox || isRadioButton
             ? nextControlId_++
             : 0;
+        const wchar_t* nativeClass = L"STATIC";
+        if (isButton || isCheckBox || isRadioButton) {
+            nativeClass = L"BUTTON";
+        } else if (isTextBox || isTextArea) {
+            nativeClass = L"EDIT";
+        } else if (isListBox) {
+            nativeClass = L"LISTBOX";
+        } else if (isComboBox) {
+            nativeClass = L"COMBOBOX";
+        } else if (isProgressBar) {
+            nativeClass = PROGRESS_CLASSW;
+        } else if (isSlider) {
+            nativeClass = TRACKBAR_CLASSW;
+        }
         HWND child = CreateWindowExW(
             isTextBox || isTextArea || isListBox ? WS_EX_CLIENTEDGE : 0,
-            isButton ? L"BUTTON" :
-                (isCheckBox || isRadioButton ? L"BUTTON" :
-                 (isTextBox || isTextArea ? L"EDIT" :
-                  (isListBox ? L"LISTBOX" :
-                   (isComboBox ? L"COMBOBOX" :
-                    (isProgressBar ? PROGRESS_CLASSW : L"STATIC"))))),
+            nativeClass,
             Utf8ToWide(control->text).c_str(),
             style,
             0,
@@ -1600,6 +1618,21 @@ void WindowsBackend::SynchronizeProgressBar(ChildBinding& binding,
     SendMessageW(binding.hwnd, PBM_SETMARQUEE,
                  static_cast<WPARAM>(control.indeterminate ? TRUE : FALSE),
                  static_cast<LPARAM>(control.indeterminate ? 50 : 0));
+}
+
+void WindowsBackend::SynchronizeSlider(ChildBinding& binding,
+                                       const ControlState& control) {
+    if (control.kind != ControlKind::Slider) return;
+
+    const bool previous = binding.synchronizingSlider;
+    binding.synchronizingSlider = true;
+    SendMessageW(binding.hwnd, TBM_SETRANGEMIN, TRUE,
+                 static_cast<LPARAM>(control.minimum));
+    SendMessageW(binding.hwnd, TBM_SETRANGEMAX, TRUE,
+                 static_cast<LPARAM>(control.maximum));
+    SendMessageW(binding.hwnd, TBM_SETPOS, TRUE,
+                 static_cast<LPARAM>(control.value));
+    binding.synchronizingSlider = previous;
 }
 
 void WindowsBackend::SynchronizeRadioButton(ChildBinding& binding,
@@ -2141,6 +2174,54 @@ LRESULT WindowsBackend::HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
                     RequestQuit(-1);
                 } catch (...) {
                     RequestQuit(-1);
+                }
+                return 0;
+            }
+        }
+        break;
+    case WM_HSCROLL:
+        if (binding) {
+            const HWND child = reinterpret_cast<HWND>(lParam);
+            std::shared_ptr<ControlState> control;
+            bool synchronizingSlider = false;
+            for (const auto& childBinding : binding->children) {
+                if (childBinding.hwnd == child) {
+                    control = childBinding.model.lock();
+                    synchronizingSlider = childBinding.synchronizingSlider;
+                    break;
+                }
+            }
+
+            const WORD notification = LOWORD(static_cast<DWORD>(wParam));
+            const bool isSliderNotification =
+                notification == TB_LINEUP ||
+                notification == TB_LINEDOWN ||
+                notification == TB_PAGEUP ||
+                notification == TB_PAGEDOWN ||
+                notification == TB_THUMBPOSITION ||
+                notification == TB_THUMBTRACK ||
+                notification == TB_TOP ||
+                notification == TB_BOTTOM ||
+                notification == TB_ENDTRACK;
+            if (control && control->kind == ControlKind::Slider) {
+                if (!synchronizingSlider && control->enabled &&
+                    IsWindowEnabled(child) != FALSE &&
+                    isSliderNotification) {
+                    try {
+                        const LRESULT nativeValue =
+                            SendMessageW(child, TBM_GETPOS, 0, 0);
+                        // DispatchSliderChanged suppresses duplicate native
+                        // notifications and updates the model before the
+                        // copied callback runs. User code may close this
+                        // window or mutate this Slider, so no binding pointer
+                        // is used after the dispatch returns.
+                        DispatchSliderChanged(control,
+                                              static_cast<int>(nativeValue));
+                    } catch (const std::exception&) {
+                        RequestQuit(-1);
+                    } catch (...) {
+                        RequestQuit(-1);
+                    }
                 }
                 return 0;
             }

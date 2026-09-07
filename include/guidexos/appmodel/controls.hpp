@@ -41,6 +41,7 @@ enum class ControlType {
     RadioButton,
     ComboBox,
     ProgressBar,
+    Slider,
 };
 
 class TextBoxRef final {
@@ -108,6 +109,24 @@ private:
     friend class ControlRef;
 };
 
+class SliderRef final {
+public:
+    SliderRef() noexcept = default;
+
+    bool IsValid() const noexcept;
+    int GetMinimum() const noexcept;
+    int GetMaximum() const noexcept;
+    int GetValue() const noexcept;
+
+private:
+    explicit SliderRef(std::weak_ptr<detail::ControlState> state) noexcept
+        : state_(std::move(state)) {}
+
+    std::weak_ptr<detail::ControlState> state_;
+
+    friend class ControlRef;
+};
+
 class ControlRef final {
 public:
     ControlRef() noexcept = default;
@@ -124,6 +143,7 @@ public:
     std::optional<TextBoxRef> AsTextBox() const noexcept;
     std::optional<TextAreaRef> AsTextArea() const noexcept;
     std::optional<ProgressBarRef> AsProgressBar() const noexcept;
+    std::optional<SliderRef> AsSlider() const noexcept;
 
     friend bool operator==(const ControlRef&, const ControlRef&) noexcept;
     friend bool operator!=(const ControlRef&, const ControlRef&) noexcept;
@@ -144,6 +164,7 @@ private:
     friend class RadioButton;
     friend class ComboBox;
     friend class ProgressBar;
+    friend class Slider;
 };
 
 class Label final {
@@ -431,6 +452,47 @@ public:
 
     void SetEnabled(bool enabled);
     bool IsEnabled() const noexcept;
+
+private:
+    std::shared_ptr<detail::ControlState> state_;
+
+    friend class Layout;
+};
+
+class Slider final {
+public:
+    Slider();
+    ~Slider();
+
+    Slider(const Slider&) = delete;
+    Slider& operator=(const Slider&) = delete;
+    Slider(Slider&&) = delete;
+    Slider& operator=(Slider&&) = delete;
+
+    // The model always preserves minimum <= value <= maximum. If a range
+    // endpoint would cross the other endpoint, it is clamped to that
+    // endpoint; changing an endpoint also clamps the current value into the
+    // new range.
+    void SetMinimum(int minimum);
+    int GetMinimum() const noexcept;
+    void SetMaximum(int maximum);
+    int GetMaximum() const noexcept;
+    void SetValue(int value);
+    int GetValue() const noexcept;
+
+    void SetToolTip(std::string text);
+    const std::string& GetToolTip() const noexcept;
+    ControlRef GetControlRef() const noexcept;
+    bool Focus() const noexcept;
+
+    void SetEnabled(bool enabled);
+    bool IsEnabled() const noexcept;
+
+    // Replaces the current callback. Passing an empty callback unsubscribes.
+    // The callback executes synchronously after the model value is current.
+    // Programmatic and user-originated changes use the same changed-value
+    // dispatch path; assigning the effective current value is a no-op.
+    void OnChanged(std::function<void()> callback);
 
 private:
     std::shared_ptr<detail::ControlState> state_;

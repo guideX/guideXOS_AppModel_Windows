@@ -173,6 +173,8 @@ LayoutMeasurement NeutralControlMeasurement(const ControlState& control) {
         return {{220, 28}, {112, 28}};
     case ControlKind::ProgressBar:
         return {{220, 22}, {96, 22}};
+    case ControlKind::Slider:
+        return {{220, 32}, {96, 24}};
     }
     return {};
 }
@@ -986,6 +988,19 @@ void DispatchCheckedChanged(const std::shared_ptr<ControlState>& control,
     NotifyControlChanged(control);
     const auto callback = control->onCheckedChanged;
     if (callback) callback(checked);
+}
+
+void DispatchSliderChanged(const std::shared_ptr<ControlState>& control,
+                           int value) {
+    if (!control || control->kind != ControlKind::Slider) return;
+
+    const int nextValue = std::clamp(value, control->minimum, control->maximum);
+    if (control->value == nextValue) return;
+
+    control->value = nextValue;
+    NotifyControlChanged(control);
+    const auto callback = control->onChanged;
+    if (callback) callback();
 }
 
 void DispatchRadioSelection(const std::shared_ptr<ControlState>& control) {

@@ -3,7 +3,7 @@
 ## Boundary
 
 ```text
-HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / ProgressBarApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
+HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / ProgressBarApp / SliderApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
           |
           v
 Public guideXOS App Model API (include/guidexos/appmodel)
@@ -22,7 +22,7 @@ Platform-neutral runtime state and backend contract (src/appmodel, src/platform)
           +--> Native desktop windows, controls, session clipboard, and shell file drops
 ```
 
-The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Slider`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
 
 ## Process-wide text clipboard
 
@@ -265,6 +265,29 @@ state. `ProgressBarApp` proves composition with the existing repeating
 event-loop `Timer`; it uses a separate `Label` for percentage text and does
 not add worker-thread or asynchronous job infrastructure.
 
+### Slider state and realization
+
+`Slider` uses the same shared `ControlState`, bounded signed integer range, and
+layout-binding path as `ProgressBar`, but adds one value-change callback and is
+focusable. It defaults to range `0..100` and value `0`. Endpoint requests and
+value assignments use the same clamp/invariant policy as `ProgressBar`, with
+zero-width and negative ranges valid. Programmatic and native/user changes
+share `DispatchSliderChanged()`, which updates the model, refreshes any live
+realization, suppresses unchanged values, and invokes a copied callback only
+once per effective value transition.
+
+The Windows backend creates a private horizontal trackbar child. It applies
+the model range/value with private trackbar messages and receives user
+position changes through the owning top-level window's `WM_HSCROLL` path. The
+originating child handle resolves the correct weak model binding, so multiple
+sliders and multiple windows remain independent. Notification duplicates and
+backend writes are suppressed by the model equality rule and a private
+synchronization flag. Focus, enabled state, ToolTips, layout measurement,
+close/reopen recreation, and callback-driven close all remain inside the same
+per-window binding lifecycle. `SliderApp` proves Slider → ProgressBar + Label
+composition using only App Model callbacks. Explicit Step and vertical
+orientation are intentionally deferred.
+
 ## Close-request contract
 
 `Window::OnClosing(std::function<void(WindowClosingEvent&)>)` is the public,
@@ -314,7 +337,7 @@ Every `WindowsBackend` instance owns a registry keyed by its own native top-leve
 
 There is no global current-window pointer. A `WM_COMMAND`-equivalent notification is first resolved through the owning top-level binding and then through that binding's child handle. A command ID is never used to search another window. Destroying one top-level binding removes only its own children and registry entry; reopening the logical window creates a new binding and new native child handles.
 
-The child binding collection includes private `EDIT` realizations for `TextBox` and `TextArea`, ordinary single-selection `LISTBOX` realizations for `ListBox`, non-editable `COMBOBOX` realizations for `ComboBox`, private progress realizations for `ProgressBar`, and native `BUTTON` realizations for buttons, checkboxes, and radio buttons. Button notifications use the backend's private command IDs; edit, list, combo, choice, and progress synchronization are routed by the originating child handle and do not need a public control ID. `EN_CHANGE`, native edit selection/caret reads and writes, multiline CRLF conversion, `LBN_SELCHANGE`, `CBN_SELCHANGE`, choice synchronization, progress range/position/marquee synchronization, UTF-16 conversion, and native synchronization guards remain entirely inside the Windows backend, so multiple controls, groups, and windows cannot cross-route their events.
+The child binding collection includes private `EDIT` realizations for `TextBox` and `TextArea`, ordinary single-selection `LISTBOX` realizations for `ListBox`, non-editable `COMBOBOX` realizations for `ComboBox`, private progress realizations for `ProgressBar`, private horizontal trackbar realizations for `Slider`, and native `BUTTON` realizations for buttons, checkboxes, and radio buttons. Button notifications use the backend's private command IDs; edit, list, combo, choice, progress, and slider synchronization are routed by the originating child handle and do not need a public control ID. `EN_CHANGE`, native edit selection/caret reads and writes, multiline CRLF conversion, `LBN_SELCHANGE`, `CBN_SELCHANGE`, choice synchronization, progress range/position/marquee synchronization, slider range/position synchronization, `WM_HSCROLL`, UTF-16 conversion, and native synchronization guards remain entirely inside the Windows backend, so multiple controls, groups, sliders, and windows cannot cross-route their events.
 
 Process-level class registration is the only intentionally shared native concern. The backend, native handles, control collections, layout realization, and destruction state are per application/window instance.
 
@@ -482,7 +505,7 @@ save failure keep the window open.
 
 ToolTip text is stored directly on `ControlState` and is intentionally not a
 layout input. `Button`, `TextBox`, `TextArea`, `ListBox`, `CheckBox`, `RadioButton`,
-`ComboBox`, and `ProgressBar` expose `SetToolTip()`/`GetToolTip()`; `Label` follows the same small
+`ComboBox`, `ProgressBar`, and `Slider` expose `SetToolTip()`/`GetToolTip()`; `Label` follows the same small
 surface. Setters validate UTF-8 and reject values over 8 KiB before changing
 the model. Empty text means no registration. The state remains useful while a
 control is detached, and a later realization registers its current text.
@@ -632,6 +655,7 @@ backend native positioning
 - `ListBox` stores copied UTF-8 items and an optional index-based selection in its neutral model state. Item mutations validate before changing the collection, preserve the same logical selected item across index shifts, clear selection when its item is removed, and refresh every live realization. `SetSelectedIndex` and native selection both update the model before invoking a copied callback; unchanged logical selections are suppressed.
 - `ComboBox` stores the same copied UTF-8 item collection and optional index-based selection model as `ListBox`. The two controls share private item/index adjustment helpers, while keeping separate public control types and native realization paths. A ComboBox is non-editable, retains selection across native detachment/recreation, and uses the same enabled and callback ownership rules.
 - `CheckBox` stores UTF-8 text, a checked bit, and an enabled bit. Its programmatic and native transitions share one changed-value dispatcher; unchanged values are suppressed and the model is current before the copied callback runs.
+- `Slider` stores a signed integer minimum, maximum, value, enabled bit, and replaced `OnChanged` callback. Programmatic and native transitions share one changed-value dispatcher; unchanged values are suppressed and the model is current before the copied callback runs.
 - `RadioButton` stores UTF-8 text, a selected bit, and an enabled bit. `RadioGroup` stores weak member links, a weak selected member, and one application affinity. A radio belongs to at most one group; membership is explicit and is never inferred from native styles, adjacency, creation order, or parent relationships.
 - Radio group selection changes the group and all affected member bits before native refresh or callbacks. The group is authoritative when the Windows button class also applies native auto-radio behavior.
 - A root layout belongs to one window; a child layout belongs to one parent, and a control belongs to one layout. Layouts own nested layout state through shared ownership, while parent and window links are weak to avoid cycles. A closed window retains its root and can realize it again.
@@ -676,6 +700,15 @@ mutate another collection, clear or remove its own selection, update a label,
 text box, checkbox, radio group, another ComboBox, or close either window.
 
 `CheckBox::SetChecked()` and native button activation use the same changed-value rule. Programmatic state changes remain legal while disabled; disabled native notifications are rejected. `RadioGroup::Select()` updates the selected index and each affected `RadioButton` before dispatching A's `false` callback and B's `true` callback. Selecting the current member is a no-op. Nested group changes are synchronous and depth-first, and callbacks are looked up/copied at each dispatch boundary so replacement or clearing affects later callbacks. Removing a selected member clears the group; destruction detaches silently to avoid invoking user code from a destructor.
+
+`Slider::SetValue()` and native trackbar position notifications use the same
+changed-value rule. The model is clamped and current before `OnChanged()` is
+entered; assigning the same effective value produces no callback. `WM_HSCROLL`
+notifications are resolved by the originating child handle, while private
+range/position writes are marked as synchronization work. A callback may
+normalize the Slider, disable it, update a ProgressBar or Label, or close its
+window. Nested value changes are synchronous and depth-first, and callback
+replacement or clearing affects later dispatches.
 
 The dispatcher does not retain a registry or child-binding iterator across user code. A close removes only the affected binding, updates live-window accounting, and applies the shutdown policy after the destruction transition. A final-window close posts the normal policy-driven exit; a non-final close leaves the message loop running.
 
@@ -780,6 +813,16 @@ enabled state, and native destruction/recreation. `progress_bar_gui_smoke.ps1`
 drives five Debug and five Release ProgressBarApp cycles covering advancing
 determinate values, completion, Reset, indeterminate switching, restart, and
 clean process exit.
+`appmodel_slider_model_test` covers default and signed ranges, endpoint/value
+clamping, zero-width ranges, unchanged-event suppression, callback
+replacement/removal, reentrant mutation, enabled state, layout, references,
+independent models, destruction, close/reopen, and application shutdown. The
+companion `appmodel_slider_lifecycle_test` inspects two native trackbars across
+two windows, signed native ranges, programmatic and routed native changes,
+duplicate notification suppression, enabled state, callback-driven close, and
+native recreation. `slider_gui_smoke.ps1` drives five Debug and five Release
+SliderApp cycles covering initial composition, focus, Right/Left/Home/End
+keyboard changes, Reset, ProgressBar/Label synchronization, and clean exit.
 `profile_manager_model_test` covers serialization/deserialization, Unicode,
 newlines, duplicate names, all modes and enabled states, version and malformed
 input rejection, parser bounds, parse-failure isolation, dirty transitions,
