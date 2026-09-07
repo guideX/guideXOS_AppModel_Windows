@@ -12,6 +12,7 @@ class ComboBox;
 class Label;
 class ListBox;
 class RadioButton;
+class TextArea;
 class TextBox;
 
 namespace detail {
@@ -70,6 +71,7 @@ public:
     void Add(RadioButton& radioButton,
              LayoutSizing sizing = LayoutSizing::Natural);
     void Add(TextBox& textBox, LayoutSizing sizing = LayoutSizing::Natural);
+    void Add(TextArea& textArea, LayoutSizing sizing = LayoutSizing::Natural);
     void Add(Layout& layout, LayoutSizing sizing = LayoutSizing::Natural);
 
     // A spacer participates in sizing and positioning but never creates a

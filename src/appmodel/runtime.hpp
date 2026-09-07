@@ -27,6 +27,7 @@ enum class ControlKind {
     Button,
     CheckBox,
     TextBox,
+    TextArea,
     ListBox,
     ComboBox,
     RadioButton,
@@ -76,6 +77,8 @@ struct ControlState {
     bool checked = false;
     bool selected = false;
     bool enabled = true;
+    bool readOnly = false;
+    bool wordWrap = true;
     std::size_t caretIndex = 0;
     TextRange selection{};
     std::weak_ptr<LayoutState> layoutParent;

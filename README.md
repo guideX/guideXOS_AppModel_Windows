@@ -1,6 +1,6 @@
 # guideXOS App Model for Windows
 
-This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, `TextBox`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
+This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
 
 ## Current milestone
 
@@ -14,6 +14,7 @@ The current vertical slice demonstrates:
 - deterministic callback cleanup and reentrant lifecycle operations
 - an explicit, public application shutdown policy
 - single-line editable text boxes with Unicode text and text-change callbacks
+- portable multiline text areas with normalized newlines, selection, clipboard commands, read-only mode, scrolling, and optional word wrapping
 - native keyboard editing, focus, and creation-order Tab navigation
 - dynamic single-selection list boxes with UTF-8 items and selection callbacks
 - non-editable single-selection combo boxes with UTF-8 items, drop-down interaction, and selection callbacks
@@ -30,8 +31,8 @@ The current vertical slice demonstrates:
 - bounded UTF-8 whole-file read/write support with safe replacement
 - cancelable, platform-neutral window close requests shared by native and programmatic close
 - a process-wide, text-only UTF-8 Clipboard API with bounded Windows Unicode conversion
-- platform-neutral TextBox scalar caret/selection queries and Copy/Cut/Paste/Delete commands
-- platform-neutral window-scoped focus identity, programmatic control focus, and routed TextBox edit commands
+- platform-neutral TextBox and TextArea scalar caret/selection queries and Copy/Cut/Paste/Delete commands
+- platform-neutral window-scoped focus identity, programmatic control focus, and routed text-edit commands
 - window-level shell file drops with bounded, ordered UTF-8 filesystem paths
 - shared UTF-8 ToolTips for controls with safe live registration and close/reopen rebuilding
 - window-level native-backed StatusBar chrome with dynamic UTF-8 text and content-size preservation
@@ -46,6 +47,8 @@ selection behavior.
 
 `HelloApp` remains the small one-window sample. `MultiWindowApp` is the focused lifecycle sample.
 `TextInputApp` is the focused editable-input sample.
+`MultilineTextApp` is the focused multiline editing, read-only, clipboard, and
+resize sample.
 `ListBoxApp` is the focused collection and selection sample.
 `ChoiceControlsApp` is the focused checkbox and radio-group sample.
 `ComboBoxApp` is the focused non-editable drop-down, mutation, and measurement sample.
@@ -119,8 +122,9 @@ spacer measures zero by default and consumes extra space only when marked
 
 Measurement is recalculated on every geometry request and backend layout pass.
 Changing label, button, checkbox, or radio text therefore updates its natural
-width immediately; text boxes keep a normal single-line preferred width, and
-list boxes keep a useful viewport size rather than measuring all items.
+width immediately; single-line text boxes keep a normal preferred height,
+multiline text areas keep a useful multi-row preferred viewport, and list boxes
+keep a useful viewport size rather than measuring all items.
 
 The contract boundary is:
 
@@ -219,7 +223,7 @@ code.
 ## ToolTips and StatusBar
 
 ToolTips are a shared control property. The supported controls are `Button`,
-`TextBox`, `ListBox`, `CheckBox`, `RadioButton`, and `ComboBox`; `Label` also
+`TextBox`, `TextArea`, `ListBox`, `CheckBox`, `RadioButton`, and `ComboBox`; `Label` also
 supports the same property. Text is UTF-8, empty text clears it, invalid UTF-8
 throws `std::invalid_argument`, and a tooltip is limited to 8 KiB. ToolTip text
 does not participate in measurement or layout.
@@ -374,7 +378,7 @@ No Windows clipboard type or error code appears in public headers or sample
 source. The service is process/system-wide, so all windows in one process see
 the same current clipboard and closing a window does not affect it.
 
-`TextBox` control commands build on this service. `Copy()` is a no-op for an
+`TextBox` and `TextArea` control commands build on this service. `Copy()` is a no-op for an
 empty selection; `Cut()` copies then removes the selection; `Paste()` is a
 no-op when no supported clipboard text exists and replaces the current
 selection otherwise; and `DeleteSelection()` removes selected text without
@@ -382,7 +386,9 @@ changing the clipboard. Direct `Clipboard::GetText()` retains its existing
 throwing `ClipboardNoTextError` contract, while control-level `Paste()` treats
 missing text as a no-op. Native physical Ctrl+C/Ctrl+X/Ctrl+V and Ctrl+A remain
 provided by the Windows edit control; application command handlers can call the
-same TextBox methods explicitly.
+same text-control methods explicitly. TextArea commands honor read-only mode;
+copy and selection remain available while Cut, Paste, and DeleteSelection are
+blocked.
 
 `ClipboardApp` exercises repeated button and `Edit` menu operations, exact
 Unicode/emoji and empty-text round trips, replacement, clear state, resize,
@@ -512,6 +518,7 @@ The sample executables are:
 build\Debug\HelloApp.exe
 build\Debug\MultiWindowApp.exe
 build\Debug\TextInputApp.exe
+build\Debug\MultilineTextApp.exe
 build\Debug\ListBoxApp.exe
 build\Debug\ChoiceControlsApp.exe
 build\Debug\ComboBoxApp.exe
@@ -532,6 +539,7 @@ Run the GUI validations directly when iterating on a sample:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\gui_smoke.ps1 -Executable .\build\Debug\HelloApp.exe
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\multi_window_gui_smoke.ps1 -Executable .\build\Debug\MultiWindowApp.exe -Cycles 3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\text_input_gui_smoke.ps1 -Executable .\build\Debug\TextInputApp.exe -Cycles 3
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\multiline_text_gui_smoke.ps1 -Executable .\build\Debug\MultilineTextApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\listbox_gui_smoke.ps1 -Executable .\build\Debug\ListBoxApp.exe -Cycles 3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\choice_controls_gui_smoke.ps1 -Executable .\build\Debug\ChoiceControlsApp.exe -Cycles 3
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\combobox_gui_smoke.ps1 -Executable .\build\Debug\ComboBoxApp.exe -Cycles 3
@@ -575,6 +583,10 @@ files, ordered multi-path drops, Unicode and duplicate paths, clear/re-drop,
 bounded valid-file preview, invalid-UTF-8 error handling, resize, close, and
 temporary-file/process cleanup. Its deterministic native injection does not
 replace the recommended physical Explorer validation.
+`MultilineTextApp` runs five Debug and five Release cycles covering native
+multiline typing and Enter, AppModel newline synchronization, selection/copy,
+paste, read-only focus and edit blocking, runtime layout resizing, and process
+cleanup.
 
 ### GUI input automation policy
 
@@ -673,6 +685,42 @@ Callbacks run synchronously on the UI thread. A callback may call `GetText`, nor
 
 Text boxes and buttons are created in layout order. Labels are skipped by native dialog-style navigation. With the sample layout, Tab moves from the Name box to the Message box, then the two buttons; Shift+Tab reverses that order. Windows supplies ordinary single-line editing, including click-to-focus, arrows, Backspace, Delete, Enter, and Space behavior.
 
+## Portable multiline text editing
+
+`TextArea` is the dedicated multiline editor. It shares the TextBox text,
+selection, caret, callback, focus, and clipboard semantics without adding a
+multiline mode to `TextBox`, so ordinary TextBox controls remain single-line.
+
+```cpp
+TextArea editor("line one\r\nline two");
+editor.SetWordWrap(true);
+editor.SetReadOnly(false);
+editor.OnTextChanged([&](const std::string& text) {
+    status.SetText("Characters: " + std::to_string(text.size()));
+});
+
+const std::string normalized = editor.GetText(); // "line one\nline two"
+editor.SelectAll();
+editor.Copy();
+```
+
+The public text is UTF-8 and uses `\n` as its only newline convention.
+`TextArea` normalizes CRLF and lone CR input to LF on construction, `SetText`,
+and native Windows edits; Windows CRLF storage remains private. User typing,
+Enter/newline, navigation, selection, replacement, deletion, and native
+clipboard editing update the model and produce at most one `OnTextChanged`
+callback per changed value. Programmatic `SetText` resets the caret to the
+scalar end and does not notify for an unchanged value.
+
+`SetReadOnly(true)` prevents user and control-level modifying commands while
+leaving focus, selection, and Copy available. `SetWordWrap(true)` is the
+default; `false` enables private native horizontal scrolling while vertical
+scrolling remains available in both modes. Both properties can be changed
+before or after realization. A TextArea has a multi-row natural/minimum
+measurement and can be marked `LayoutSizing::Expand` to consume available
+vertical space. Rich text, undo/redo, grapheme-aware selection, a selection
+changed event, and a general-purpose scroll container remain out of scope.
+
 ## Platform-neutral focus and routed edit commands
 
 `Window::GetFocusedControl()` reports the control that currently owns native
@@ -681,8 +729,9 @@ keyboard focus in that App Model window. It returns a weak, state-backed
 across native detachment and close; while the logical state is retained it
 remains an identity, but `HasFocus()`/`Focus()` report no current native focus
 while closed. When the logical state is destroyed, it becomes invalid and its
-queries and operations fail safely. `ControlRef::AsTextBox()` provides the
-narrow TextBox editing capability needed for routed commands.
+queries and operations fail safely. `ControlRef::AsTextBox()` and
+`ControlRef::AsTextArea()` provide narrow text-editing capability views for
+routed commands.
 
 ```cpp
 const ControlRef focused = window.GetFocusedControl();
@@ -708,10 +757,11 @@ reported when it returns.
 
 The Edit menus in `TextEditingApp`, `ProfileManagerApp`, and `FocusCommandApp`
 query this reference at command time. ProfileManager enables Cut, Copy, and
-Delete only for a focused TextBox with a selection, Paste only for a focused
-TextBox when the text clipboard is supported, and Select All only for a focused
-TextBox with text. `Menu::OnOpening` refreshes those states immediately before
-the menu is shown. Ctrl+X/C/V/A accelerators route to the focused TextBox
+Delete only for a focused TextBox or TextArea with a selection, Paste only for a
+focused text editor when the text clipboard is supported, and Select All only
+for a focused text editor with text. `Menu::OnOpening` refreshes those states
+immediately before the menu is shown. Ctrl+X/C/V/A accelerators route to the
+focused text editor
 before normal native edit dispatch, so each shortcut performs one logical
 operation; global Delete is intentionally not an accelerator.
 
@@ -823,7 +873,7 @@ For an A-to-B selection, the group index and both member states are updated atom
 
 `RadioGroup` and all its members must belong to one `Application`. A group cannot be used across applications. Independent groups remain independent even when their controls share a window or appear in different windows. Closing a window detaches native realizations but retains text, enabled state, selection, membership, and callbacks; reopening creates fresh native controls without initial selection events.
 
-`Button`, `TextBox`, `ListBox`, `ComboBox`, `CheckBox`, and `RadioButton` expose `SetEnabled(bool)` and `IsEnabled()`. Disabled native controls reject native interaction. Programmatic model mutations remain allowed, including `Button::Click`, text/item changes, list/combo selection, checkbox state, and radio-group selection. Labels do not currently expose enabled state.
+`Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, and `RadioButton` expose `SetEnabled(bool)` and `IsEnabled()`. Disabled native controls reject native interaction. Programmatic model mutations remain allowed, including `Button::Click`, text/item changes, list/combo selection, checkbox state, and radio-group selection. Labels do not currently expose enabled state.
 
 Choice controls receive the normal vertical layout height, stretch horizontally, and participate in creation-order Tab navigation. Native buttons provide mouse activation, Space activation, focus, and standard radio arrow behavior where the native group segment permits it; the App Model `RadioGroup` remains authoritative and refreshes every realization after a selection.
 
@@ -860,7 +910,7 @@ coalesce very short intervals, so `Timer` is not a real-time scheduler.
 - A root `Layout` belongs to one `Window`; a closed window may reuse it when reopened. A child layout belongs to one parent layout, and a control belongs to one layout. Reusing a layout or control across different `Application` objects is rejected with `std::logic_error`.
 - Adding the same control or child layout to one layout twice is rejected with `std::logic_error`; direct and indirect layout cycles are rejected as well.
 - `Button::OnClick` replaces the prior callback. Destroying a `Button` clears its stored callback even if a layout still retains its model state.
-- `TextBox::OnTextChanged` replaces the prior callback. Destroying a `TextBox` clears its stored callback even if a layout still retains its model state.
+- `TextBox::OnTextChanged` and `TextArea::OnTextChanged` replace the prior callback. Destroying either text control clears its stored callback even if a layout still retains its model state.
 - `ListBox::OnSelectionChanged` replaces the prior callback. Destroying a `ListBox` clears its stored callback even if a layout still retains its model state.
 - `ComboBox::OnSelectionChanged` replaces the prior callback. Destroying a `ComboBox` clears its stored callback even if a layout still retains its model state.
 - `CheckBox::OnCheckedChanged` and `RadioButton::OnSelectedChanged` replace their prior callbacks. Destroying a choice control clears its callback even if a layout retains its model state.
@@ -879,7 +929,7 @@ coalesce very short intervals, so `Timer` is not a real-time scheduler.
   window close/reopen, and clears its native schedule on `Stop()`, destruction,
   or application shutdown.
 
-Threading, background dispatch, one-shot timers, multiline/rich/password editing, grapheme or
+Threading, background dispatch, one-shot timers, rich/password editing, grapheme or
 word selection, selection-changed events, undo/redo, context menus, drag/drop,
 editable or autocomplete combo boxes, tri-state checkboxes, toggle switches,
 visual group boxes, multi-selection, item payloads, sorting, virtualization,

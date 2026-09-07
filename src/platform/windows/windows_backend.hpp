@@ -70,8 +70,10 @@ private:
     UINT AllocateMenuCommandId();
     void SynchronizeCheckBox(ChildBinding& binding,
                              const ControlState& control);
-    void SynchronizeTextBox(ChildBinding& binding,
-                            const ControlState& control);
+    void SynchronizeTextEdit(ChildBinding& binding,
+                             const ControlState& control);
+    void SynchronizeTextAreaProperties(ChildBinding& binding,
+                                       const ControlState& control);
     void SynchronizeListBox(ChildBinding& binding, const ControlState& control);
     void SynchronizeComboBox(ChildBinding& binding, const ControlState& control);
     void SynchronizeRadioButton(ChildBinding& binding,

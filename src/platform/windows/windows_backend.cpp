@@ -311,20 +311,85 @@ std::wstring ReadNativeText(HWND hwnd) {
     return result;
 }
 
-void SynchronizeTextBoxStateFromNative(
+std::wstring NormalizeNativeTextAreaNewlines(const std::wstring& text) {
+    std::wstring normalized;
+    normalized.reserve(text.size());
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        if (text[index] == L'\r') {
+            normalized.push_back(L'\n');
+            if (index + 1 < text.size() && text[index + 1] == L'\n') ++index;
+        } else {
+            normalized.push_back(text[index]);
+        }
+    }
+    return normalized;
+}
+
+std::size_t NativeTextAreaOffsetForScalarIndex(const std::wstring& text,
+                                               std::size_t scalarIndex) {
+    std::size_t scalar = 0;
+    for (std::size_t offset = 0; offset < text.size();) {
+        if (scalar == scalarIndex) return offset;
+        if (text[offset] == L'\r' && offset + 1 < text.size() &&
+            text[offset + 1] == L'\n') {
+            offset += 2;
+        } else if (text[offset] >= 0xD800 && text[offset] <= 0xDBFF &&
+                   offset + 1 < text.size() && text[offset + 1] >= 0xDC00 &&
+                   text[offset + 1] <= 0xDFFF) {
+            offset += 2;
+        } else {
+            ++offset;
+        }
+        ++scalar;
+    }
+    return text.size();
+}
+
+std::size_t NativeTextAreaScalarIndexForOffset(const std::wstring& text,
+                                               std::size_t nativeOffset) {
+    const std::size_t limit = std::min(nativeOffset, text.size());
+    std::size_t scalar = 0;
+    for (std::size_t offset = 0; offset < limit;) {
+        if (text[offset] == L'\r' && offset + 1 < text.size() &&
+            text[offset + 1] == L'\n' && offset + 1 < limit) {
+            offset += 2;
+        } else if (text[offset] >= 0xD800 && text[offset] <= 0xDBFF &&
+                   offset + 1 < text.size() && text[offset + 1] >= 0xDC00 &&
+                   text[offset + 1] <= 0xDFFF && offset + 1 < limit) {
+            offset += 2;
+        } else {
+            ++offset;
+        }
+        ++scalar;
+    }
+    return scalar;
+}
+
+bool IsTextEdit(ControlKind kind) noexcept {
+    return kind == ControlKind::TextBox || kind == ControlKind::TextArea;
+}
+
+void SynchronizeTextEditStateFromNative(
     const std::shared_ptr<ControlState>& control, HWND hwnd) {
-    if (!control || control->kind != ControlKind::TextBox || !hwnd) return;
+    if (!control || !IsTextEdit(control->kind) || !hwnd) return;
 
     DWORD nativeStart = 0;
     DWORD nativeEnd = 0;
     SendMessageW(hwnd, EM_GETSEL,
                  reinterpret_cast<WPARAM>(&nativeStart),
                  reinterpret_cast<LPARAM>(&nativeEnd));
-    const std::wstring nativeText = ReadNativeText(hwnd);
+    const std::wstring rawText = ReadNativeText(hwnd);
+    const bool isTextArea = control->kind == ControlKind::TextArea;
     const std::size_t first = std::min<std::size_t>(nativeStart, nativeEnd);
     const std::size_t last = std::max<std::size_t>(nativeStart, nativeEnd);
-    const std::size_t start = Utf16ScalarIndexForCodeUnitOffset(nativeText, first);
-    const std::size_t end = Utf16ScalarIndexForCodeUnitOffset(nativeText, last);
+    const std::size_t normalizedFirst = isTextArea
+        ? NativeTextAreaScalarIndexForOffset(rawText, first)
+        : Utf16ScalarIndexForCodeUnitOffset(rawText, first);
+    const std::size_t normalizedLast = isTextArea
+        ? NativeTextAreaScalarIndexForOffset(rawText, last)
+        : Utf16ScalarIndexForCodeUnitOffset(rawText, last);
+    const std::size_t start = normalizedFirst;
+    const std::size_t end = normalizedLast;
     control->selection = TextRange{start, end - start};
     control->caretIndex = end;
 }
@@ -341,7 +406,7 @@ struct ControlSubclassState {
 constexpr wchar_t kControlSubclassProperty[] =
     L"guideXOS.AppModel.ControlSubclassState";
 
-bool IsTextBoxPositionMessage(UINT message) noexcept {
+bool IsTextEditPositionMessage(UINT message) noexcept {
     switch (message) {
     case WM_CHAR:
     case WM_KEYDOWN:
@@ -433,9 +498,9 @@ LRESULT CALLBACK ControlSubclassProcedure(HWND hwnd, UINT message,
             } else if (message == WM_KILLFOCUS) {
                 ClearNativeFocus(lockedWindow, lockedModel);
             }
-            if (lockedModel && lockedModel->kind == ControlKind::TextBox &&
-                IsTextBoxPositionMessage(message)) {
-                SynchronizeTextBoxStateFromNative(lockedModel, hwnd);
+            if (lockedModel && IsTextEdit(lockedModel->kind) &&
+                IsTextEditPositionMessage(message)) {
+                SynchronizeTextEditStateFromNative(lockedModel, hwnd);
             }
         } catch (...) {
             // Native controls should never expose invalid focus/selection
@@ -562,6 +627,10 @@ public:
                 const int height = std::max(28, AddMetric(fontHeight, 8));
                 return {{180, height}, {72, height}};
             }
+            case ControlKind::TextArea: {
+                const int height = std::max(140, AddMetric(fontHeight, 112));
+                return {{220, height}, {96, std::max(48, AddMetric(fontHeight, 16))}};
+            }
             case ControlKind::ListBox: {
                 const int viewportHeight = std::max(140,
                                                      AddMetric(fontHeight, 112));
@@ -597,6 +666,8 @@ struct WindowsBackend::ChildBinding {
     bool synchronizingText{false};
     bool synchronizingSelection{false};
     bool synchronizingCheck{false};
+    bool nativeReadOnly{false};
+    bool nativeWordWrap{true};
     std::vector<std::string> nativeItems;
 };
 
@@ -1089,16 +1160,22 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
                 SynchronizeCheckBox(current->children[index], *control);
             } else if (control->kind == ControlKind::RadioButton) {
                 SynchronizeRadioButton(current->children[index], *control);
+            } else if (control->kind == ControlKind::TextArea) {
+                SynchronizeTextAreaProperties(current->children[index], *control);
             }
             const std::wstring desiredText = Utf8ToWide(control->text);
 
-            if (control->kind == ControlKind::TextBox) {
+            if (IsTextEdit(control->kind)) {
                 const TextRange desiredSelection = control->selection;
                 const std::size_t desiredCaret = control->caretIndex;
                 // SetWindowTextW on an EDIT may synchronously emit EN_CHANGE.
                 // Keep that native notification private while applying the
                 // already-authoritative model value.
-                if (ReadNativeText(childHwnd) != desiredText) {
+                const std::wstring nativeText = ReadNativeText(childHwnd);
+                const std::wstring comparableNativeText =
+                    control->kind == ControlKind::TextArea
+                    ? NormalizeNativeTextAreaNewlines(nativeText) : nativeText;
+                if (comparableNativeText != desiredText) {
                     auto* live = FindWindowBinding(window);
                     if (!live) return;
                     ChildBinding* childBinding = nullptr;
@@ -1131,7 +1208,7 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
                 if (!live) return;
                 for (auto& candidate : live->children) {
                     if (candidate.hwnd == childHwnd) {
-                        SynchronizeTextBox(candidate, *control);
+                        SynchronizeTextEdit(candidate, *control);
                         break;
                     }
                 }
@@ -1156,6 +1233,7 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
         // Public mutators are intentionally simple. If a later mutation
         // contains malformed UTF-8, keep the native window alive and leave
         // its previous text in place rather than throwing through WndProc.
+    } catch (...) {
     }
 }
 
@@ -1215,17 +1293,22 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         const bool isButton = control->kind == ControlKind::Button;
         const bool isCheckBox = control->kind == ControlKind::CheckBox;
         const bool isTextBox = control->kind == ControlKind::TextBox;
+        const bool isTextArea = control->kind == ControlKind::TextArea;
         const bool isListBox = control->kind == ControlKind::ListBox;
         const bool isComboBox = control->kind == ControlKind::ComboBox;
         const bool isRadioButton = control->kind == ControlKind::RadioButton;
         DWORD style = WS_CHILD | WS_VISIBLE |
-            (isButton || isCheckBox || isTextBox || isListBox || isComboBox ||
-             isRadioButton
+            (isButton || isCheckBox || isTextBox || isTextArea || isListBox ||
+             isComboBox || isRadioButton
                  ? WS_TABSTOP
                  : SS_LEFT) |
             (isCheckBox ? BS_AUTOCHECKBOX | BS_LEFT | BS_VCENTER : 0) |
             (isRadioButton ? BS_AUTORADIOBUTTON | BS_LEFT | BS_VCENTER : 0) |
             (isTextBox ? ES_AUTOHSCROLL | ES_LEFT : 0) |
+            (isTextArea ? ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN |
+                 ES_LEFT | WS_VSCROLL |
+                 (control->wordWrap ? 0 : ES_AUTOHSCROLL | WS_HSCROLL) : 0) |
+            (isTextArea && control->readOnly ? ES_READONLY : 0) |
             (isListBox ? LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL : 0) |
             (isComboBox ? CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_AUTOHSCROLL |
                          WS_VSCROLL : 0);
@@ -1241,10 +1324,10 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             ? nextControlId_++
             : 0;
         HWND child = CreateWindowExW(
-            isTextBox || isListBox ? WS_EX_CLIENTEDGE : 0,
+            isTextBox || isTextArea || isListBox ? WS_EX_CLIENTEDGE : 0,
             isButton ? L"BUTTON" :
                 (isCheckBox || isRadioButton ? L"BUTTON" :
-                 (isTextBox ? L"EDIT" :
+                 (isTextBox || isTextArea ? L"EDIT" :
                   (isListBox ? L"LISTBOX" :
                    (isComboBox ? L"COMBOBOX" : L"STATIC")))),
             Utf8ToWide(control->text).c_str(),
@@ -1263,13 +1346,16 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
 
         SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         EnableWindow(child, control->enabled ? TRUE : FALSE);
-        binding.children.push_back(ChildBinding{control, child, commandId});
+        ChildBinding childBinding{control, child, commandId};
+        childBinding.nativeReadOnly = isTextArea && control->readOnly;
+        childBinding.nativeWordWrap = !isTextArea || control->wordWrap;
+        binding.children.push_back(std::move(childBinding));
         InstallControlSubclass(child, control, binding.model);
     }
 }
 
-void WindowsBackend::SynchronizeTextBox(ChildBinding& binding,
-                                        const ControlState& control) {
+void WindowsBackend::SynchronizeTextEdit(ChildBinding& binding,
+                                         const ControlState& control) {
     struct SelectionSynchronizationGuard {
         bool& value;
         bool previous;
@@ -1278,15 +1364,47 @@ void WindowsBackend::SynchronizeTextBox(ChildBinding& binding,
     } guard{binding.synchronizingSelection, binding.synchronizingSelection};
     binding.synchronizingSelection = true;
 
-    const std::wstring nativeText = Utf8ToWide(control.text);
+    const std::wstring nativeText = ReadNativeText(binding.hwnd);
     const std::size_t end = control.selection.start + control.selection.length;
-    const std::size_t nativeStart = Utf16CodeUnitOffsetForScalarIndex(
-        nativeText, control.selection.start);
-    const std::size_t nativeEnd = Utf16CodeUnitOffsetForScalarIndex(
-        nativeText, end);
+    const auto nativeOffsetForScalar = [&](std::size_t index) {
+        return control.kind == ControlKind::TextArea
+            ? NativeTextAreaOffsetForScalarIndex(nativeText, index)
+            : Utf16CodeUnitOffsetForScalarIndex(nativeText, index);
+    };
+    const std::size_t nativeStart = nativeOffsetForScalar(control.selection.start);
+    const std::size_t nativeEnd = nativeOffsetForScalar(end);
     SendMessageW(binding.hwnd, EM_SETSEL,
                  static_cast<WPARAM>(nativeStart),
                  static_cast<LPARAM>(nativeEnd));
+}
+
+void WindowsBackend::SynchronizeTextAreaProperties(
+    ChildBinding& binding, const ControlState& control) {
+    if (control.kind != ControlKind::TextArea) return;
+
+    if (binding.nativeReadOnly != control.readOnly) {
+        SendMessageW(binding.hwnd, EM_SETREADONLY,
+                     static_cast<WPARAM>(control.readOnly ? TRUE : FALSE), 0);
+        binding.nativeReadOnly = control.readOnly;
+    }
+
+    if (binding.nativeWordWrap != control.wordWrap) {
+        LONG_PTR style = GetWindowLongPtrW(binding.hwnd, GWL_STYLE);
+        const LONG_PTR horizontalStyles =
+            static_cast<LONG_PTR>(ES_AUTOHSCROLL) |
+            static_cast<LONG_PTR>(WS_HSCROLL);
+        if (control.wordWrap) {
+            style &= ~horizontalStyles;
+        } else {
+            style |= horizontalStyles;
+        }
+        SetWindowLongPtrW(binding.hwnd, GWL_STYLE, style);
+        SetWindowPos(binding.hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        InvalidateRect(binding.hwnd, nullptr, TRUE);
+        binding.nativeWordWrap = control.wordWrap;
+    }
 }
 
 void WindowsBackend::SynchronizeCheckBox(ChildBinding& binding,
@@ -1978,14 +2096,16 @@ LRESULT WindowsBackend::HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
                 }
                 return 0;
             }
-            if (control && control->kind == ControlKind::TextBox &&
+            if (control && IsTextEdit(control->kind) &&
                 notification == EN_CHANGE) {
                 if (synchronizingText || !control->enabled ||
                     IsWindowEnabled(child) == FALSE) return 0;
                 try {
                     const std::wstring nativeText = ReadNativeText(child);
-                    SynchronizeTextBoxStateFromNative(control, child);
-                    const std::string text = Utf16ToUtf8(nativeText);
+                    SynchronizeTextEditStateFromNative(control, child);
+                    const std::string text = control->kind == ControlKind::TextArea
+                        ? Utf16ToUtf8(NormalizeNativeTextAreaNewlines(nativeText))
+                        : Utf16ToUtf8(nativeText);
                     // DispatchTextChanged updates the model before user code
                     // runs. The callback may close this window, so no binding
                     // pointer is used after this call.

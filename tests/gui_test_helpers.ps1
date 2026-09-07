@@ -372,6 +372,16 @@ public static class GuiTestNative {
         SendMessage(edit, WM_SETTEXT, IntPtr.Zero, value);
     }
 
+    public static void NativeAppendText(IntPtr edit, string value) {
+        foreach (var character in value) {
+            SendMessage(edit, WM_CHAR, (IntPtr)character, IntPtr.Zero);
+        }
+    }
+
+    public static void NativeChar(IntPtr edit, ushort character) {
+        SendMessage(edit, WM_CHAR, (IntPtr)character, IntPtr.Zero);
+    }
+
     public static void NativeKey(IntPtr control, ushort key) {
         if (key == 0x08) {
             SendMessage(control, WM_CHAR, (IntPtr)key, IntPtr.Zero);

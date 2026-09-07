@@ -42,6 +42,20 @@ void ValidateTextRange(const std::string& text, TextRange range) {
     }
 }
 
+std::string NormalizeTextAreaNewlines(std::string text) {
+    std::string normalized;
+    normalized.reserve(text.size());
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        if (text[index] == '\r') {
+            normalized.push_back('\n');
+            if (index + 1 < text.size() && text[index + 1] == '\n') ++index;
+        } else {
+            normalized.push_back(text[index]);
+        }
+    }
+    return normalized;
+}
+
 void SetTextPosition(const std::shared_ptr<detail::ControlState>& state,
                      std::size_t caret, TextRange selection) {
     state->caretIndex = caret;
@@ -50,6 +64,10 @@ void SetTextPosition(const std::shared_ptr<detail::ControlState>& state,
 
 void ReplaceTextSelection(const std::shared_ptr<detail::ControlState>& state,
                           std::string replacement) {
+    if (!state || (state->kind == detail::ControlKind::TextArea &&
+                   state->readOnly)) {
+        return;
+    }
     ValidateUtf8(replacement);
     const TextRange range = state->selection;
     const std::size_t rangeEnd = RangeEnd(range);
@@ -77,11 +95,19 @@ std::shared_ptr<detail::ControlState> LockTextBox(
     return state;
 }
 
+std::shared_ptr<detail::ControlState> LockTextArea(
+    const std::weak_ptr<detail::ControlState>& weakState) noexcept {
+    auto state = weakState.lock();
+    if (!state || state->kind != detail::ControlKind::TextArea) return nullptr;
+    return state;
+}
+
 ControlType GetControlType(detail::ControlKind kind) noexcept {
     switch (kind) {
     case detail::ControlKind::Label: return ControlType::Label;
     case detail::ControlKind::Button: return ControlType::Button;
     case detail::ControlKind::TextBox: return ControlType::TextBox;
+    case detail::ControlKind::TextArea: return ControlType::TextArea;
     case detail::ControlKind::ListBox: return ControlType::ListBox;
     case detail::ControlKind::CheckBox: return ControlType::CheckBox;
     case detail::ControlKind::RadioButton: return ControlType::RadioButton;
@@ -148,6 +174,61 @@ void TextBoxRef::DeleteSelection() const {
     ReplaceTextSelection(state, {});
 }
 
+bool TextAreaRef::IsValid() const noexcept {
+    return static_cast<bool>(LockTextArea(state_));
+}
+
+bool TextAreaRef::HasSelection() const noexcept {
+    const auto state = LockTextArea(state_);
+    return state && state->selection.length != 0;
+}
+
+bool TextAreaRef::HasText() const noexcept {
+    const auto state = LockTextArea(state_);
+    return state && !state->text.empty();
+}
+
+void TextAreaRef::SelectAll() const {
+    const auto state = LockTextArea(state_);
+    if (!state) return;
+    const TextRange range{0, detail::CountUnicodeScalars(state->text)};
+    const std::size_t end = RangeEnd(range);
+    if (state->caretIndex == end && state->selection == range) return;
+    SetTextPosition(state, end, range);
+    detail::NotifyControlChanged(state);
+}
+
+void TextAreaRef::Copy() const {
+    const auto state = LockTextArea(state_);
+    if (!state || state->selection.length == 0) return;
+    const TextRange range = state->selection;
+    const std::size_t end = RangeEnd(range);
+    const std::size_t startByte = detail::Utf8ByteOffsetForScalarIndex(
+        state->text, range.start);
+    const std::size_t endByte = detail::Utf8ByteOffsetForScalarIndex(
+        state->text, end);
+    Clipboard::SetText(state->text.substr(startByte, endByte - startByte));
+}
+
+void TextAreaRef::Cut() const {
+    const auto state = LockTextArea(state_);
+    if (!state || state->readOnly || state->selection.length == 0) return;
+    Copy();
+    ReplaceTextSelection(state, {});
+}
+
+void TextAreaRef::Paste() const {
+    const auto state = LockTextArea(state_);
+    if (!state || state->readOnly || !Clipboard::HasText()) return;
+    ReplaceTextSelection(state, Clipboard::GetText());
+}
+
+void TextAreaRef::DeleteSelection() const {
+    const auto state = LockTextArea(state_);
+    if (!state || state->readOnly || state->selection.length == 0) return;
+    ReplaceTextSelection(state, {});
+}
+
 bool ControlRef::IsValid() const noexcept {
     return !state_.expired();
 }
@@ -174,6 +255,14 @@ std::optional<TextBoxRef> ControlRef::AsTextBox() const noexcept {
     const auto state = state_.lock();
     if (!state || state->kind != detail::ControlKind::TextBox) return std::nullopt;
     return TextBoxRef{state};
+}
+
+std::optional<TextAreaRef> ControlRef::AsTextArea() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::TextArea) {
+        return std::nullopt;
+    }
+    return TextAreaRef{state};
 }
 
 bool operator==(const ControlRef& left, const ControlRef& right) noexcept {
@@ -400,6 +489,152 @@ bool TextBox::IsEnabled() const noexcept {
 }
 
 void TextBox::OnTextChanged(std::function<void(const std::string&)> callback) {
+    state_->onTextChanged = std::move(callback);
+}
+
+TextArea::TextArea(std::string text)
+    : state_(nullptr) {
+    text = NormalizeTextAreaNewlines(std::move(text));
+    ValidateUtf8(text);
+    state_ = std::make_shared<detail::ControlState>(detail::ControlKind::TextArea,
+                                                    std::move(text));
+    state_->caretIndex = detail::CountUnicodeScalars(state_->text);
+    state_->selection = TextRange{state_->caretIndex, 0};
+}
+
+TextArea::~TextArea() {
+    state_->onTextChanged = {};
+}
+
+void TextArea::SetText(std::string text) {
+    text = NormalizeTextAreaNewlines(std::move(text));
+    ValidateUtf8(text);
+    const std::size_t end = detail::CountUnicodeScalars(text);
+    SetTextPosition(state_, end, TextRange{end, 0});
+    if (state_->text == text) {
+        detail::NotifyControlChanged(state_);
+        return;
+    }
+    detail::DispatchTextChanged(state_, std::move(text));
+}
+
+const std::string& TextArea::GetText() const noexcept {
+    return state_->text;
+}
+
+void TextArea::SetToolTip(std::string text) {
+    SetControlToolTip(state_, std::move(text));
+}
+
+const std::string& TextArea::GetToolTip() const noexcept {
+    return state_->toolTip;
+}
+
+ControlRef TextArea::GetControlRef() const noexcept {
+    return ControlRef{state_};
+}
+
+bool TextArea::Focus() const noexcept {
+    return detail::FocusControl(state_);
+}
+
+std::size_t TextArea::GetCaretIndex() const noexcept {
+    return state_->caretIndex;
+}
+
+void TextArea::SetCaretIndex(std::size_t index) {
+    if (index > detail::CountUnicodeScalars(state_->text)) {
+        throw std::out_of_range("TextArea caret index is out of range");
+    }
+    const TextRange selection{index, 0};
+    if (state_->caretIndex == index && state_->selection == selection) return;
+    SetTextPosition(state_, index, selection);
+    detail::NotifyControlChanged(state_);
+}
+
+TextRange TextArea::GetSelection() const noexcept {
+    return state_->selection;
+}
+
+void TextArea::SetSelection(TextRange range) {
+    ValidateTextRange(state_->text, range);
+    const std::size_t end = RangeEnd(range);
+    if (state_->caretIndex == end && state_->selection == range) return;
+    SetTextPosition(state_, end, range);
+    detail::NotifyControlChanged(state_);
+}
+
+void TextArea::SelectAll() {
+    SetSelection(TextRange{0, detail::CountUnicodeScalars(state_->text)});
+}
+
+void TextArea::ClearSelection() {
+    SetCaretIndex(RangeEnd(state_->selection));
+}
+
+std::string TextArea::GetSelectedText() const {
+    const TextRange range = state_->selection;
+    const std::size_t end = RangeEnd(range);
+    const std::size_t startByte = detail::Utf8ByteOffsetForScalarIndex(
+        state_->text, range.start);
+    const std::size_t endByte = detail::Utf8ByteOffsetForScalarIndex(
+        state_->text, end);
+    return state_->text.substr(startByte, endByte - startByte);
+}
+
+void TextArea::Copy() {
+    if (state_->selection.length == 0) return;
+    Clipboard::SetText(GetSelectedText());
+}
+
+void TextArea::Cut() {
+    if (state_->readOnly || state_->selection.length == 0) return;
+    Clipboard::SetText(GetSelectedText());
+    ReplaceTextSelection(state_, {});
+}
+
+void TextArea::Paste() {
+    if (state_->readOnly || !Clipboard::HasText()) return;
+    ReplaceTextSelection(state_, Clipboard::GetText());
+}
+
+void TextArea::DeleteSelection() {
+    if (state_->readOnly || state_->selection.length == 0) return;
+    ReplaceTextSelection(state_, {});
+}
+
+void TextArea::SetReadOnly(bool readOnly) {
+    if (state_->readOnly == readOnly) return;
+    state_->readOnly = readOnly;
+    detail::NotifyControlChanged(state_);
+}
+
+bool TextArea::IsReadOnly() const noexcept {
+    return state_->readOnly;
+}
+
+void TextArea::SetWordWrap(bool wordWrap) {
+    if (state_->wordWrap == wordWrap) return;
+    state_->wordWrap = wordWrap;
+    detail::NotifyControlChanged(state_);
+}
+
+bool TextArea::IsWordWrap() const noexcept {
+    return state_->wordWrap;
+}
+
+void TextArea::SetEnabled(bool enabled) {
+    if (state_->enabled == enabled) return;
+    state_->enabled = enabled;
+    detail::NotifyControlChanged(state_);
+}
+
+bool TextArea::IsEnabled() const noexcept {
+    return state_->enabled;
+}
+
+void TextArea::OnTextChanged(
+    std::function<void(const std::string&)> callback) {
     state_->onTextChanged = std::move(callback);
 }
 

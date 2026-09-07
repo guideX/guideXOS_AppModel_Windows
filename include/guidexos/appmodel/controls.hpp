@@ -35,6 +35,7 @@ enum class ControlType {
     Label,
     Button,
     TextBox,
+    TextArea,
     ListBox,
     CheckBox,
     RadioButton,
@@ -64,6 +65,29 @@ private:
     friend class ControlRef;
 };
 
+class TextAreaRef final {
+public:
+    TextAreaRef() noexcept = default;
+
+    bool IsValid() const noexcept;
+    bool HasSelection() const noexcept;
+    bool HasText() const noexcept;
+
+    void SelectAll() const;
+    void Copy() const;
+    void Cut() const;
+    void Paste() const;
+    void DeleteSelection() const;
+
+private:
+    explicit TextAreaRef(std::weak_ptr<detail::ControlState> state) noexcept
+        : state_(std::move(state)) {}
+
+    std::weak_ptr<detail::ControlState> state_;
+
+    friend class ControlRef;
+};
+
 class ControlRef final {
 public:
     ControlRef() noexcept = default;
@@ -74,10 +98,11 @@ public:
     bool IsEnabled() const noexcept;
     bool Focus() const noexcept;
 
-    // TextBox is the only capability view exposed by this milestone. Other
-    // control kinds return an empty view; no generic command interface is
-    // implied.
+    // TextBox and TextArea are the narrow capability views exposed for text
+    // editing. Other control kinds return an empty view; no generic command
+    // interface is implied.
     std::optional<TextBoxRef> AsTextBox() const noexcept;
+    std::optional<TextAreaRef> AsTextArea() const noexcept;
 
     friend bool operator==(const ControlRef&, const ControlRef&) noexcept;
     friend bool operator!=(const ControlRef&, const ControlRef&) noexcept;
@@ -92,6 +117,7 @@ private:
     friend class Label;
     friend class Button;
     friend class TextBox;
+    friend class TextArea;
     friend class ListBox;
     friend class CheckBox;
     friend class RadioButton;
@@ -204,6 +230,58 @@ public:
     // Replaces the current callback. Passing an empty callback unsubscribes.
     // The callback executes synchronously on the application event-loop
     // thread after text and post-mutation caret/selection state are updated.
+    void OnTextChanged(std::function<void(const std::string&)> callback);
+
+private:
+    std::shared_ptr<detail::ControlState> state_;
+
+    friend class Layout;
+};
+
+class TextArea final {
+public:
+    explicit TextArea(std::string text = {});
+    ~TextArea();
+
+    TextArea(const TextArea&) = delete;
+    TextArea& operator=(const TextArea&) = delete;
+    TextArea(TextArea&&) = delete;
+    TextArea& operator=(TextArea&&) = delete;
+
+    void SetText(std::string text);
+    const std::string& GetText() const noexcept;
+    void SetToolTip(std::string text);
+    const std::string& GetToolTip() const noexcept;
+    ControlRef GetControlRef() const noexcept;
+    bool Focus() const noexcept;
+
+    // Text indexes are Unicode scalar-value indexes in the normalized UTF-8
+    // text. Newlines are represented as '\n'; Windows CRLF is private to the
+    // native realization.
+    std::size_t GetCaretIndex() const noexcept;
+    void SetCaretIndex(std::size_t index);
+    TextRange GetSelection() const noexcept;
+    void SetSelection(TextRange range);
+    void SelectAll();
+    void ClearSelection();
+    std::string GetSelectedText() const;
+
+    void Copy();
+    void Cut();
+    void Paste();
+    void DeleteSelection();
+
+    void SetReadOnly(bool readOnly);
+    bool IsReadOnly() const noexcept;
+
+    // Word wrapping is enabled by default. When disabled, the native editor
+    // exposes horizontal scrolling privately while retaining vertical scroll.
+    void SetWordWrap(bool wordWrap);
+    bool IsWordWrap() const noexcept;
+
+    void SetEnabled(bool enabled);
+    bool IsEnabled() const noexcept;
+
     void OnTextChanged(std::function<void(const std::string&)> callback);
 
 private:

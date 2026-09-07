@@ -85,6 +85,10 @@ void Layout::Add(TextBox& textBox, LayoutSizing sizing) {
     AddControlToLayout(state_, textBox.state_, sizing);
 }
 
+void Layout::Add(TextArea& textArea, LayoutSizing sizing) {
+    AddControlToLayout(state_, textArea.state_, sizing);
+}
+
 void Layout::Add(Layout& layout, LayoutSizing sizing) {
     if (layout.state_ == state_ || IsAncestor(layout.state_, state_)) {
         throw std::logic_error("A Layout cannot contain itself or an ancestor");

@@ -151,6 +151,7 @@ LayoutMeasurement NeutralControlMeasurement(const ControlState& control) {
     constexpr int buttonHeight = 30;
     constexpr int choiceHeight = 22;
     constexpr int textBoxHeight = 28;
+    constexpr int textAreaHeight = 140;
 
     switch (control.kind) {
     case ControlKind::Label:
@@ -164,6 +165,8 @@ LayoutMeasurement NeutralControlMeasurement(const ControlState& control) {
                 {28, choiceHeight}};
     case ControlKind::TextBox:
         return {{180, textBoxHeight}, {72, textBoxHeight}};
+    case ControlKind::TextArea:
+        return {{220, textAreaHeight}, {96, 48}};
     case ControlKind::ListBox:
         return {{220, 140}, {96, 48}};
     case ControlKind::ComboBox:
@@ -932,7 +935,9 @@ void DispatchButtonClick(const std::shared_ptr<ControlState>& control) {
 
 void DispatchTextChanged(const std::shared_ptr<ControlState>& control,
                          std::string text) {
-    if (!control || control->kind != ControlKind::TextBox || control->text == text) {
+    if (!control || (control->kind != ControlKind::TextBox &&
+                     control->kind != ControlKind::TextArea) ||
+        control->text == text) {
         return;
     }
 

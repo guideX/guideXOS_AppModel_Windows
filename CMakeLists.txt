@@ -120,6 +120,11 @@ add_executable(TextEditingApp WIN32
 )
 target_link_libraries(TextEditingApp PRIVATE guidexos_appmodel)
 
+add_executable(MultilineTextApp WIN32
+    samples/MultilineTextApp/main.cpp
+)
+target_link_libraries(MultilineTextApp PRIVATE guidexos_appmodel)
+
 add_executable(FocusCommandApp WIN32
     samples/FocusCommandApp/main.cpp
 )
@@ -158,6 +163,7 @@ if(MSVC)
     target_link_options(DialogApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(ClipboardApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(TextEditingApp PRIVATE /ENTRY:mainCRTStartup)
+    target_link_options(MultilineTextApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(FocusCommandApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(FileDropApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(PolishApp PRIVATE /ENTRY:mainCRTStartup)
@@ -176,6 +182,7 @@ if(MSVC)
     target_compile_options(DialogApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(ClipboardApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(TextEditingApp PRIVATE /W4 /WX /permissive-)
+    target_compile_options(MultilineTextApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(FocusCommandApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(FileDropApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(PolishApp PRIVATE /W4 /WX /permissive-)
@@ -193,6 +200,7 @@ else()
     target_compile_options(DialogApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(ClipboardApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(TextEditingApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(MultilineTextApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(FocusCommandApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(FileDropApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(PolishApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -297,6 +305,11 @@ add_executable(appmodel_text_box_test
 )
 target_link_libraries(appmodel_text_box_test PRIVATE guidexos_appmodel user32)
 
+add_executable(appmodel_text_area_test
+    tests/text_area_model_behavior_test.cpp
+)
+target_link_libraries(appmodel_text_area_test PRIVATE guidexos_appmodel user32)
+
 add_executable(appmodel_focus_model_test
     tests/focus_model_behavior_test.cpp
 )
@@ -349,6 +362,7 @@ if(MSVC)
     target_compile_options(appmodel_file_api_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_clipboard_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_text_box_test PRIVATE /W4 /WX /permissive-)
+    target_compile_options(appmodel_text_area_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_focus_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_file_drop_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_file_drop_native_test PRIVATE /W4 /WX /permissive-)
@@ -373,6 +387,7 @@ else()
     target_compile_options(appmodel_file_api_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_clipboard_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_text_box_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(appmodel_text_area_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_focus_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_file_drop_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_file_drop_native_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -399,6 +414,7 @@ add_test(NAME appmodel_dialog_model_behavior COMMAND appmodel_dialog_model_test)
 add_test(NAME appmodel_file_api_behavior COMMAND appmodel_file_api_test)
 add_test(NAME appmodel_clipboard_behavior COMMAND appmodel_clipboard_test)
 add_test(NAME appmodel_text_box_behavior COMMAND appmodel_text_box_test)
+add_test(NAME appmodel_text_area_behavior COMMAND appmodel_text_area_test)
 add_test(NAME appmodel_focus_model_behavior COMMAND appmodel_focus_model_test)
 add_test(NAME appmodel_file_drop_model_behavior COMMAND appmodel_file_drop_model_test)
 add_test(NAME appmodel_file_drop_native_behavior COMMAND appmodel_file_drop_native_test)
@@ -511,6 +527,15 @@ if(WIN32)
             -Cycles 5
     )
     set_tests_properties(text_editing_gui_smoke PROPERTIES TIMEOUT 600)
+
+    add_test(
+        NAME multiline_text_gui_smoke
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/multiline_text_gui_smoke.ps1"
+            -Executable "$<TARGET_FILE:MultilineTextApp>"
+            -Cycles "$<$<CONFIG:Debug>:5>$<$<NOT:$<CONFIG:Debug>>:5>"
+    )
+    set_tests_properties(multiline_text_gui_smoke PROPERTIES TIMEOUT 300)
 
     add_test(
         NAME focus_command_gui_smoke

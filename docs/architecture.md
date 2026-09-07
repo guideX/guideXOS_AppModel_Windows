@@ -3,7 +3,7 @@
 ## Boundary
 
 ```text
-HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
+HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
           |
           v
 Public guideXOS App Model API (include/guidexos/appmodel)
@@ -22,7 +22,7 @@ Platform-neutral runtime state and backend contract (src/appmodel, src/platform)
           +--> Native desktop windows, controls, session clipboard, and shell file drops
 ```
 
-The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
 
 ## Process-wide text clipboard
 
@@ -136,7 +136,35 @@ window; backend dispatch retains only shared model state across that user code.
 Native physical Ctrl+C/Ctrl+X/Ctrl+V and Ctrl+A remain native edit behavior.
 `KeyShortcut::Ctrl('A')`, `Ctrl('C')`, `Ctrl('X')`, and `Ctrl('V')` are also
 available to application menus. The focus layer below lets those menu
-commands target the currently focused TextBox without exposing native focus.
+commands target the currently focused text editor without exposing native focus.
+
+## TextArea multiline editing
+
+`TextArea` is a dedicated multiline control rather than a mode of `TextBox`.
+Both controls share the neutral scalar caret/selection model, synchronous
+`OnTextChanged` dispatch, focus behavior, and `Clipboard`-backed Copy/Cut/Paste
+commands. This keeps ordinary `TextBox` controls single-line and avoids an
+invalid combination of single-line and multiline state.
+
+The public text value is UTF-8 with `\n` as the only newline convention. Initial
+text, `SetText()`, native Enter/newline edits, and native Windows CRLF storage
+are normalized at the App Model boundary; CRLF and lone CR become one public LF.
+Selection ranges and caret positions count Unicode scalar values, not UTF-16
+code units. A programmatic assignment moves the caret to the scalar end,
+clears selection, and suppresses the callback when the value is unchanged.
+
+`SetReadOnly(true)` prevents user edits and mutating control commands while
+preserving focus, selection, caret queries, and Copy. Native vertical scrolling
+is automatic. `SetWordWrap()` is a portable wrapping choice and can be changed
+before or after realization; the Windows backend updates the private native
+style without exposing Windows edit flags. The control has a useful multi-row
+natural/minimum measurement and participates in `LayoutSizing::Expand` for
+larger editor viewports.
+
+This milestone intentionally does not provide rich text, syntax highlighting,
+undo/redo, password mode, document streaming, or a general-purpose scroll-view
+abstraction. The current implementation and validation are Windows-only; the
+neutral API is designed so another backend can implement the same semantics.
 
 ## Platform-neutral focus and routed editing
 
@@ -147,9 +175,9 @@ queries lock the state before use. A reference remains a safe logical identity
 across native teardown, layout detachment, and window close while its model
 state is retained; `HasFocus()` and `Focus()` report no current native focus
 while closed. When the logical state is destroyed, the weak reference becomes
-invalid rather than dangling. `AsTextBox()` is the one narrow capability query
-currently needed for edit routing and returns a safe `TextBoxRef` with the same
-weak lifetime behavior.
+invalid rather than dangling. `AsTextBox()` and `AsTextArea()` are narrow
+capability queries for the two text-editing surfaces and return safe references
+with the same weak lifetime behavior.
 
 The backend observes private `WM_SETFOCUS` and `WM_KILLFOCUS` transitions for
 every realized interactive control. The runtime records the focused control
@@ -256,7 +284,7 @@ Every `WindowsBackend` instance owns a registry keyed by its own native top-leve
 
 There is no global current-window pointer. A `WM_COMMAND`-equivalent notification is first resolved through the owning top-level binding and then through that binding's child handle. A command ID is never used to search another window. Destroying one top-level binding removes only its own children and registry entry; reopening the logical window creates a new binding and new native child handles.
 
-The child binding collection includes private `EDIT` realizations for `TextBox`, ordinary single-selection `LISTBOX` realizations for `ListBox`, non-editable `COMBOBOX` realizations for `ComboBox`, and native `BUTTON` realizations for buttons, checkboxes, and radio buttons. Button notifications use the backend's private command IDs; edit, list, combo, and choice notifications are routed by the originating child handle and do not need a public control ID. `EN_CHANGE`, native edit selection/caret reads and writes, `LBN_SELCHANGE`, `CBN_SELCHANGE`, `BN_CLICKED`, `BM_GETCHECK`, `BM_SETCHECK`, `WM_GETTEXT`, list/combo item messages, UTF-16 conversion, and native synchronization guards remain entirely inside the Windows backend, so multiple controls, groups, and windows cannot cross-route their events.
+The child binding collection includes private `EDIT` realizations for `TextBox` and `TextArea`, ordinary single-selection `LISTBOX` realizations for `ListBox`, non-editable `COMBOBOX` realizations for `ComboBox`, and native `BUTTON` realizations for buttons, checkboxes, and radio buttons. Button notifications use the backend's private command IDs; edit, list, combo, and choice notifications are routed by the originating child handle and do not need a public control ID. `EN_CHANGE`, native edit selection/caret reads and writes, multiline CRLF conversion, `LBN_SELCHANGE`, `CBN_SELCHANGE`, `BN_CLICKED`, `BM_GETCHECK`, `BM_SETCHECK`, `WM_GETTEXT`, list/combo item messages, UTF-16 conversion, and native synchronization guards remain entirely inside the Windows backend, so multiple controls, groups, and windows cannot cross-route their events.
 
 Process-level class registration is the only intentionally shared native concern. The backend, native handles, control collections, layout realization, and destruction state are per application/window instance.
 
@@ -423,7 +451,7 @@ save failure keep the window open.
 ## ToolTip and StatusBar chrome
 
 ToolTip text is stored directly on `ControlState` and is intentionally not a
-layout input. `Button`, `TextBox`, `ListBox`, `CheckBox`, `RadioButton`, and
+layout input. `Button`, `TextBox`, `TextArea`, `ListBox`, `CheckBox`, `RadioButton`, and
 `ComboBox` expose `SetToolTip()`/`GetToolTip()`; `Label` follows the same small
 surface. Setters validate UTF-8 and reject values over 8 KiB before changing
 the model. Empty text means no registration. The state remains useful while a
@@ -490,6 +518,9 @@ the owning process.
 `LayoutState`, or a spacer, and carries `LayoutSizing::Natural` or
 `LayoutSizing::Expand`. Controls are natural by default, except `ListBox`,
 which remains expanding by default to preserve the earlier vertical behavior.
+`TextArea` is natural by default but reports a multi-row preferred and minimum
+viewport, so adding it with `LayoutSizing::Expand` gives an editor meaningful
+vertical space without changing the general allocator.
 `Orientation::Vertical` allocates the main-axis
 height; `Orientation::Horizontal` allocates the main-axis width. Children
 stretch across the cross axis, which preserves the original vertical sample
@@ -503,7 +534,8 @@ controls do not need implementation-oriented measurement methods. A spacer
 reports zero for both sizes. The neutral provider uses deterministic logical
 fallbacks: labels measure text-like width and preserve normal text height,
 buttons include a bounded label/padding width and remain at least usable,
-text boxes use a normal single-line height and a reasonable preferred width,
+single-line text boxes use a normal edit height and a reasonable preferred
+width, while text areas use a bounded multi-row viewport,
 choices include indicator/gap space, and list boxes use a useful viewport
 instead of total item content.
 
@@ -566,7 +598,7 @@ backend native positioning
 - `Window::Close()` requests a close through `OnClosing`; it is idempotent and cancelable. If allowed, it destroys the native realization. `Show()` can realize the same model again until application shutdown.
 - `WindowState` retains its shared `LayoutState`; layouts retain shared control model state. Native child bindings retain weak control references, so destroyed public controls cannot keep callbacks alive.
 - `Button` destruction clears its callback. A control model retained by a layout may still display text after the public control object is gone, but its event is inert.
-- `TextBox` stores the authoritative UTF-8 logical value in its neutral model state. `SetText` validates the value, ignores identical assignments, refreshes a live native edit when required, and dispatches only after the model is current. Native `EN_CHANGE` reads the edit once, converts UTF-16 to UTF-8 with strict error handling, updates the model, and then invokes the copied callback.
+- `TextBox` and `TextArea` store authoritative UTF-8 logical values in neutral model state. `TextBox` remains single-line; `TextArea` normalizes CRLF and lone CR to public LF and stores read-only/word-wrap choices. `SetText` validates the value, ignores identical assignments, refreshes a live native edit when required, and dispatches only after the model is current. Native `EN_CHANGE` reads the edit once, converts UTF-16 to UTF-8 with strict error handling, updates the model, and then invokes the copied callback.
 - `ListBox` stores copied UTF-8 items and an optional index-based selection in its neutral model state. Item mutations validate before changing the collection, preserve the same logical selected item across index shifts, clear selection when its item is removed, and refresh every live realization. `SetSelectedIndex` and native selection both update the model before invoking a copied callback; unchanged logical selections are suppressed.
 - `ComboBox` stores the same copied UTF-8 item collection and optional index-based selection model as `ListBox`. The two controls share private item/index adjustment helpers, while keeping separate public control types and native realization paths. A ComboBox is non-editable, retains selection across native detachment/recreation, and uses the same enabled and callback ownership rules.
 - `CheckBox` stores UTF-8 text, a checked bit, and an enabled bit. Its programmatic and native transitions share one changed-value dispatcher; unchanged values are suppressed and the model is current before the copied callback runs.
@@ -601,7 +633,7 @@ own callback, or request application shutdown. The same-window recursive close
 is ignored while the callback is active. User code is not called after native
 destruction commits; teardown cleanup is private and callback-free.
 
-`TextBox::SetText()` and native edit changes use the same changed-value rule: identical values do not dispatch. The model text and post-edit caret/selection are updated before `OnTextChanged` entry, and the callback receives a stable copy of the new UTF-8 value. A callback can normalize its own box or update another box; each distinct resulting value produces its own synchronous event. Native writes are marked as synchronization work, so the resulting `EN_CHANGE` cannot recursively re-dispatch the programmatic assignment. Control-level Cut, Paste, and DeleteSelection each produce one logical event when text changes; selection-only changes produce no text event. The callback may query or change selection, copy or edit another TextBox, set its own text, close its own or another window, or request shutdown; the backend does not use a child-binding pointer after returning from user code.
+`TextBox::SetText()`, `TextArea::SetText()`, and native edit changes use the same changed-value rule: identical values do not dispatch. The model text and post-edit caret/selection are updated before `OnTextChanged` entry, and the callback receives a stable copy of the new UTF-8 value. A callback can normalize its own editor or update another editor; each distinct resulting value produces its own synchronous event. Native writes are marked as synchronization work, so the resulting `EN_CHANGE` cannot recursively re-dispatch the programmatic assignment. Control-level Cut, Paste, and DeleteSelection each produce one logical event when text changes; selection-only changes produce no text event. The callback may query or change selection, copy or edit another text control, set its own text, close its own or another window, or request shutdown; the backend does not use a child-binding pointer after returning from user code.
 
 `ListBox::SetSelectedIndex()` and native list changes use the same changed-selection rule: identical indexes do not dispatch. The model is updated before `OnSelectionChanged` entry, and the callback receives a copy of the optional index. Item insertion/removal adjusts the index of the same logical item without a redundant event; removing that item or clearing a non-empty list emits one empty-selection event. List item and selection synchronization is guarded against native notifications generated by backend writes, so programmatic changes cannot recursively re-dispatch. Nested user selection changes are synchronous and depth-first. The callback may mutate this or another list, update labels/text boxes, or close either window; the backend does not use a child-binding pointer after returning from user code.
 
@@ -680,10 +712,10 @@ headers or sample sources.
 
 ## Validation coverage
 
-`appmodel_model_test` covers neutral control and callback behavior, including UTF-8 validation, identical-value semantics, self-normalization, cross-box updates, cleanup, and cross-application layout rejection. `appmodel_layout_test` covers compatible default vertical behavior, horizontal/nested geometry, natural and expanding items, minimum-aware shrink/clipping, spacing, undersized and empty layouts, resize recalculation, ownership, cycle rejection, cross-application rejection, and close/reopen. `appmodel_layout_measurement_test` feeds deterministic synthetic measurements into the neutral allocator and covers zero/invalid sizes, natural/minimum composition, both orientations, expansion, minimum-aware shrinking, below-minimum clipping, padding/spacing, nested layouts, dynamic remeasurement, stability, and extreme bounds without HWNDs. `appmodel_lifecycle_test` covers live-window accounting, idempotent show/close, text callbacks that update labels and other boxes, duplicate close requests during text dispatch, retained text across native recreation, backend detachment, and final-window policy exit. `appmodel_listbox_model_test` covers collection indexes, duplicate and Unicode items, selection shifts, invalid indexes, event suppression, callback replacement, reentrant selection, list mutation from callbacks, and selected-item removal/clear behavior. `appmodel_listbox_lifecycle_test` covers multiple list boxes in one and multiple windows, cross-control updates, close-own/close-other callbacks, retained state, and native recreation. `gui_smoke.ps1` preserves the HelloApp regression coverage. `multi_window_gui_smoke.ps1` drives three complete real-window cycles covering both-direction control updates, duplicate-open prevention, button and native close paths, reopen, primary-close-with-secondary-alive, final-window exit code, and orphan-process checks. `text_input_gui_smoke.ps1` drives three TextInputApp cycles covering visible edit controls, initial text, native edit notifications, preview updates, Unicode, Backspace/Delete, Tab and Shift+Tab, button keyboard paths, clear, close-after-edit, and process cleanup. `listbox_gui_smoke.ps1` drives three ListBoxApp cycles covering visible native list content, Unicode and duplicates, native selection notifications, mouse/message selection, Up/Down, callback output, Tab focus, Unicode insertion, indexed removal, clear, repeated mutations, close-after-selection, and process cleanup. The GUI scripts report when the desktop requires deterministic native-message fallback; physical keyboard validation should then be checked manually.
+`appmodel_model_test` covers neutral control and callback behavior, including UTF-8 validation, identical-value semantics, self-normalization, cross-box updates, cleanup, and cross-application layout rejection. `appmodel_text_area_test` covers multiline model normalization, scalar selection, clipboard commands, read-only behavior, word-wrap state, native insertion/deletion, focus transfer, multiple editors, ordinary TextBox single-line regression, close/reopen, and application shutdown. `appmodel_layout_test` covers compatible default vertical behavior, horizontal/nested geometry, natural and expanding items, minimum-aware shrink/clipping, spacing, undersized and empty layouts, resize recalculation, ownership, cycle rejection, cross-application rejection, and close/reopen. `appmodel_layout_measurement_test` feeds deterministic synthetic measurements into the neutral allocator and covers zero/invalid sizes, natural/minimum composition, both orientations, expansion, minimum-aware shrinking, below-minimum clipping, padding/spacing, nested layouts, dynamic remeasurement, stability, and extreme bounds without HWNDs. `appmodel_lifecycle_test` covers live-window accounting, idempotent show/close, text callbacks that update labels and other boxes, duplicate close requests during text dispatch, retained text across native recreation, backend detachment, and final-window policy exit. `appmodel_listbox_model_test` covers collection indexes, duplicate and Unicode items, selection shifts, invalid indexes, event suppression, callback replacement, reentrant selection, list mutation from callbacks, and selected-item removal/clear behavior. `appmodel_listbox_lifecycle_test` covers multiple list boxes in one and multiple windows, cross-control updates, close-own/close-other callbacks, retained state, and native recreation. `gui_smoke.ps1` preserves the HelloApp regression coverage. `multi_window_gui_smoke.ps1` drives three complete real-window cycles covering both-direction control updates, duplicate-open prevention, button and native close paths, reopen, primary-close-with-secondary-alive, final-window exit code, and orphan-process checks. `text_input_gui_smoke.ps1` drives three TextInputApp cycles covering visible edit controls, initial text, native edit notifications, preview updates, Unicode, Backspace/Delete, Tab and Shift+Tab, button keyboard paths, clear, close-after-edit, and process cleanup. `multiline_text_gui_smoke.ps1` drives five Debug and five Release cycles covering native multiline typing and Enter, normalized App Model text, selection/copy, paste, read-only blocking, re-enabling, resize, and process cleanup. `listbox_gui_smoke.ps1` drives three ListBoxApp cycles covering visible native list content, Unicode and duplicates, native selection notifications, mouse/message selection, Up/Down, callback output, Tab focus, Unicode insertion, indexed removal, clear, repeated mutations, close-after-selection, and process cleanup. The GUI scripts report when the desktop requires deterministic native-message fallback; physical keyboard validation should then be checked manually.
 
 `appmodel_focus_model_test` covers invalid initial focus, programmatic focus
-for every interactive control, control identity and TextBox capability,
+for every interactive control, control identity and text-editor capabilities,
 disabled/unrealized/detached controls, callback reentrancy, close/reopen,
 multiple-window focus transfer, and weak-reference invalidation. The
 `focus_command_gui_smoke.ps1` suite drives five Debug and three Release cycles
@@ -783,7 +815,8 @@ changes; close/reopen retention; and multi-window copy after source closure.
 `text_editing_gui_smoke.ps1` runs five deterministic native GUI cycles for
 programmatic caret/selection display, exact selected clipboard text, Unicode
 replacement, menu commands, targeted native selection synchronization,
-multi-TextBox copy/paste, close/reopen, and orphan-process cleanup. It does not
+multi-TextBox copy/paste, close/reopen, and orphan-process cleanup. The
+multiline smoke covers the dedicated TextArea lifecycle described above. It does not
 claim to automate physical mouse dragging or keyboard-layout-dependent Ctrl
 input.
 
@@ -800,8 +833,9 @@ no grid/table, weights, percentages, anchors, public min/max constraints,
 scroll container, designer metadata, or responsive breakpoint system. Neutral
 text widths remain bounded logical fallbacks, while the Windows backend can use
 the assigned native font and text extent; there is no public text-measurement
-or DPI abstraction. `TextBox` is intentionally single-line and exposes no
-multiline document, rich text, password mode, grapheme-cluster or word
+or DPI abstraction. `TextBox` is intentionally single-line; `TextArea` provides
+the bounded multiline document surface but exposes no rich text, password mode,
+grapheme-cluster or word
 selection, selection-changed event, undo/redo, context menu, drag/drop,
 clipboard history, image clipboard, or formatting contract. Focus is limited
 to the current window-scoped child query and programmatic focus request; there
