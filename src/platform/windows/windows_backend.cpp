@@ -1527,6 +1527,45 @@ void WindowsBackend::CloseWindow(const std::shared_ptr<WindowState>& window) noe
     if (binding->hwnd) DestroyWindow(binding->hwnd);
 }
 
+UINT_PTR WindowsBackend::FindTimerId(
+    const std::shared_ptr<TimerState>& timer) const noexcept {
+    if (!timer) return 0;
+    for (const auto& [timerId, weakTimer] : timers_) {
+        if (weakTimer.lock() == timer) return timerId;
+    }
+    return 0;
+}
+
+bool WindowsBackend::StartTimer(const std::shared_ptr<TimerState>& timer) {
+    if (shutdown_ || !timer || timer->interval.count() <= 0 ||
+        static_cast<std::uintmax_t>(timer->interval.count()) >
+            static_cast<std::uintmax_t>(std::numeric_limits<UINT>::max())) {
+        return false;
+    }
+    if (FindTimerId(timer) != 0) return true;
+
+    if (nextTimerId_ == 0) nextTimerId_ = 1;
+    const UINT_PTR requestedId = nextTimerId_++;
+    const UINT_PTR timerId = SetTimer(
+        nullptr, requestedId, static_cast<UINT>(timer->interval.count()), nullptr);
+    if (timerId == 0) return false;
+    timers_.emplace(timerId, timer);
+    return true;
+}
+
+void WindowsBackend::StopTimer(
+    const std::shared_ptr<TimerState>& timer) noexcept {
+    if (!timer) return;
+    for (auto iterator = timers_.begin(); iterator != timers_.end();) {
+        if (iterator->second.lock() == timer) {
+            KillTimer(nullptr, iterator->first);
+            iterator = timers_.erase(iterator);
+        } else {
+            ++iterator;
+        }
+    }
+}
+
 MessageDialogResult WindowsBackend::ShowMessageDialog(
     const std::shared_ptr<WindowState>& owner, const std::string& message,
     const std::string& title, MessageDialogButtons buttons,
@@ -1616,11 +1655,15 @@ std::optional<std::string> WindowsBackend::ShowSaveFileDialog(
 }
 
 int WindowsBackend::Run() {
-        MSG message{};
+    MSG message{};
     while (!shutdown_) {
         const BOOL result = GetMessageW(&message, nullptr, 0, 0);
         if (result == 0) return static_cast<int>(message.wParam);
         if (result == -1) return -1;
+        if (message.message == WM_TIMER && message.hwnd == nullptr) {
+            HandleTimer(static_cast<UINT_PTR>(message.wParam));
+            continue;
+        }
         bool handledAsAccelerator = false;
         HWND focus = GetFocus();
         HWND target = focus ? GetAncestor(focus, GA_ROOT) : GetActiveWindow();
@@ -1646,6 +1689,31 @@ int WindowsBackend::Run() {
         DispatchMessageW(&message);
     }
     return 0;
+}
+
+void WindowsBackend::HandleTimer(UINT_PTR timerId) noexcept {
+    const auto iterator = timers_.find(timerId);
+    if (iterator == timers_.end()) return;
+
+    const auto timer = iterator->second.lock();
+    if (!timer) {
+        KillTimer(nullptr, timerId);
+        timers_.erase(iterator);
+        return;
+    }
+    try {
+        DispatchTimerTick(timer);
+    } catch (const std::exception&) {
+        timer->running = false;
+        KillTimer(nullptr, timerId);
+        timers_.erase(timerId);
+        RequestQuit(-1);
+    } catch (...) {
+        timer->running = false;
+        KillTimer(nullptr, timerId);
+        timers_.erase(timerId);
+        RequestQuit(-1);
+    }
 }
 
 void WindowsBackend::RequestQuit(int exitCode) noexcept {
@@ -1680,6 +1748,11 @@ void WindowsBackend::HandleNativeDestroyed(HWND hwnd) noexcept {
 void WindowsBackend::Shutdown() noexcept {
     if (shutdown_) return;
     shutdown_ = true;
+    for (const auto& [timerId, weakTimer] : timers_) {
+        KillTimer(nullptr, timerId);
+        if (const auto timer = weakTimer.lock()) timer->running = false;
+    }
+    timers_.clear();
     while (!windows_.empty()) {
         const HWND hwnd = windows_.begin()->first;
         if (IsWindow(hwnd)) {

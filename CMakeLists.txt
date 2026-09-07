@@ -17,6 +17,7 @@ add_library(guidexos_appmodel STATIC
     src/appmodel/menu.cpp
     src/appmodel/runtime.cpp
     src/appmodel/status_bar.cpp
+    src/appmodel/timer.cpp
     src/appmodel/text_index.cpp
     src/appmodel/text_validation.cpp
     src/appmodel/window.cpp
@@ -138,6 +139,11 @@ add_executable(PolishApp WIN32
 target_link_libraries(PolishApp PRIVATE guidexos_appmodel)
 target_compile_definitions(PolishApp PRIVATE GUIDEXOS_STATUS_TEST_HELPER)
 
+add_executable(TimerApp WIN32
+    samples/TimerApp/main.cpp
+)
+target_link_libraries(TimerApp PRIVATE guidexos_appmodel)
+
 if(MSVC)
     # Keep the sample's source-level entry point platform-neutral while
     # selecting the Windows GUI subsystem (and therefore no console window).
@@ -155,6 +161,7 @@ if(MSVC)
     target_link_options(FocusCommandApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(FileDropApp PRIVATE /ENTRY:mainCRTStartup)
     target_link_options(PolishApp PRIVATE /ENTRY:mainCRTStartup)
+    target_link_options(TimerApp PRIVATE /ENTRY:mainCRTStartup)
 endif()
 
 if(MSVC)
@@ -172,6 +179,7 @@ if(MSVC)
     target_compile_options(FocusCommandApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(FileDropApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(PolishApp PRIVATE /W4 /WX /permissive-)
+    target_compile_options(TimerApp PRIVATE /W4 /WX /permissive-)
     target_compile_options(profile_manager_model PRIVATE /W4 /WX /permissive-)
 else()
     target_compile_options(HelloApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -189,6 +197,7 @@ else()
     target_compile_options(FileDropApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(PolishApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(profile_manager_model PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(TimerApp PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 add_executable(appmodel_model_test
@@ -316,6 +325,11 @@ target_link_libraries(appmodel_tooltip_statusbar_test PRIVATE
     guidexos_appmodel user32 shell32 comctl32
 )
 
+add_executable(appmodel_timer_test
+    tests/timer_model_behavior_test.cpp
+)
+target_link_libraries(appmodel_timer_test PRIVATE guidexos_appmodel)
+
 if(MSVC)
     target_compile_options(appmodel_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_lifecycle_test PRIVATE /W4 /WX /permissive-)
@@ -339,6 +353,7 @@ if(MSVC)
     target_compile_options(appmodel_file_drop_model_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_file_drop_native_test PRIVATE /W4 /WX /permissive-)
     target_compile_options(appmodel_tooltip_statusbar_test PRIVATE /W4 /WX /permissive-)
+    target_compile_options(appmodel_timer_test PRIVATE /W4 /WX /permissive-)
 else()
     target_compile_options(appmodel_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_lifecycle_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -362,6 +377,7 @@ else()
     target_compile_options(appmodel_file_drop_model_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_file_drop_native_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     target_compile_options(appmodel_tooltip_statusbar_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    target_compile_options(appmodel_timer_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 enable_testing()
@@ -387,6 +403,7 @@ add_test(NAME appmodel_focus_model_behavior COMMAND appmodel_focus_model_test)
 add_test(NAME appmodel_file_drop_model_behavior COMMAND appmodel_file_drop_model_test)
 add_test(NAME appmodel_file_drop_native_behavior COMMAND appmodel_file_drop_native_test)
 add_test(NAME appmodel_tooltip_statusbar_behavior COMMAND appmodel_tooltip_statusbar_test)
+add_test(NAME appmodel_timer_behavior COMMAND appmodel_timer_test)
 
 if(WIN32)
     add_test(
@@ -521,4 +538,13 @@ if(WIN32)
             -Cycles "$<$<CONFIG:Debug>:5>$<$<NOT:$<CONFIG:Debug>>:3>"
     )
     set_tests_properties(polish_gui_smoke PROPERTIES TIMEOUT 360)
+
+    add_test(
+        NAME timer_gui_smoke
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/tests/timer_gui_smoke.ps1"
+            -Executable "$<TARGET_FILE:TimerApp>"
+            -Cycles 5
+    )
+    set_tests_properties(timer_gui_smoke PROPERTIES TIMEOUT 180)
 endif()

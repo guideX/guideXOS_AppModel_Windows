@@ -918,6 +918,12 @@ void DispatchFilesDropped(const std::shared_ptr<WindowState>& window,
     callback(event);
 }
 
+void DispatchTimerTick(const std::shared_ptr<TimerState>& timer) {
+    if (!timer || !timer->running) return;
+    const auto callback = timer->onTick;
+    if (callback) callback();
+}
+
 void DispatchButtonClick(const std::shared_ptr<ControlState>& control) {
     if (!control || control->kind != ControlKind::Button || !control->onClick) return;
     auto callback = control->onClick;

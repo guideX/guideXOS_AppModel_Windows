@@ -9,4 +9,5 @@
 #include "layout.hpp"
 #include "menu.hpp"
 #include "status_bar.hpp"
+#include "timer.hpp"
 #include "window.hpp"

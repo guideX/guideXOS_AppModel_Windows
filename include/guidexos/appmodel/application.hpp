@@ -50,6 +50,7 @@ private:
     std::shared_ptr<detail::ApplicationState> state_;
 
     friend class Window;
+    friend class Timer;
 };
 
 } // namespace guidexos::appmodel

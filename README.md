@@ -1,6 +1,6 @@
 # guideXOS App Model for Windows
 
-This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, `TextBox`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, and the Windows Unicode clipboard while keeping platform handles and messages private.
+This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, `TextBox`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
 
 ## Current milestone
 
@@ -35,6 +35,7 @@ The current vertical slice demonstrates:
 - window-level shell file drops with bounded, ordered UTF-8 filesystem paths
 - shared UTF-8 ToolTips for controls with safe live registration and close/reopen rebuilding
 - window-level native-backed StatusBar chrome with dynamic UTF-8 text and content-size preservation
+- repeating application timers dispatched on the App Model event-loop thread
 
 `ProfileManagerApp` is the first cohesive example application. It manages a
 profile collection through a small application-level document/controller and
@@ -63,6 +64,8 @@ paths, preserves order and duplicates, previews a bounded UTF-8 text file, and
 reports invalid-file errors without executing or opening anything through the
 shell.
 `PolishApp` is the focused ToolTip, StatusBar, nested-form, and resize sample.
+`TimerApp` is the focused repeating timer, stop/restart, and explicit-shutdown
+sample.
 
 ## Composable layouts
 
@@ -520,6 +523,7 @@ build\Debug\TextEditingApp.exe
 build\Debug\FocusCommandApp.exe
 build\Debug\FileDropApp.exe
 build\Debug\PolishApp.exe
+build\Debug\TimerApp.exe
 ```
 
 Run the GUI validations directly when iterating on a sample:
@@ -540,6 +544,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\text_editing_gui_smo
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\focus_command_gui_smoke.ps1 -Executable .\build\Debug\FocusCommandApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\file_drop_gui_smoke.ps1 -Executable .\build\Debug\FileDropApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\polish_gui_smoke.ps1 -Executable .\build\Debug\PolishApp.exe -Cycles 5
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\timer_gui_smoke.ps1 -Executable .\build\Debug\TimerApp.exe -Cycles 5
 ```
 
 These scripts drive the real executables and real native windows. The
@@ -822,6 +827,31 @@ For an A-to-B selection, the group index and both member states are updated atom
 
 Choice controls receive the normal vertical layout height, stretch horizontally, and participate in creation-order Tab navigation. Native buttons provide mouse activation, Space activation, focus, and standard radio arrow behavior where the native group segment permits it; the App Model `RadioGroup` remains authoritative and refreshes every realization after a selection.
 
+## Application timers
+
+`Timer` is a repeating, application-owned event source. It uses only
+platform-neutral time and callback semantics in application code:
+
+```cpp
+Timer refresh(app, std::chrono::milliseconds(250));
+refresh.OnTick([&]() {
+    status.SetText("Refreshed");
+});
+refresh.Start();
+```
+
+`Start()` and `Stop()` are idempotent. `SetInterval()` accepts a positive
+`std::chrono::milliseconds` value and restarts a running timer with the new
+interval. `OnTick()` replaces the callback; the callback runs synchronously on
+the application event-loop thread after the timer fires and may stop or
+reconfigure the timer. Destruction, `Stop()`, and backend shutdown remove the
+native schedule. Timers are repeating only in this milestone; they do not
+provide background-thread execution, cross-thread dispatch, or a one-shot
+mode. With `ShutdownMode::WhenLastWindowCloses`, a timer does not keep an
+application alive after its last window closes; use `ShutdownMode::Explicit`
+when the application owns its shutdown request. Windows may clamp or
+coalesce very short intervals, so `Timer` is not a real-time scheduler.
+
 ## Lifetime and supported operations
 
 - `Application` must outlive its `Window` objects. `Window` and control objects are non-copyable.
@@ -845,8 +875,11 @@ Choice controls receive the normal vertical layout height, stretch horizontally,
   window, request application shutdown, or request their own close again. The
   same-window request is ignored while the callback is active; native teardown
   and runtime forced cleanup never invoke a callback after the model is closed.
+- `Timer` belongs to one `Application`, retains its interval and callback across
+  window close/reopen, and clears its native schedule on `Stop()`, destruction,
+  or application shutdown.
 
-Threading, background dispatch, multiline/rich/password editing, grapheme or
+Threading, background dispatch, one-shot timers, multiline/rich/password editing, grapheme or
 word selection, selection-changed events, undo/redo, context menus, drag/drop,
 editable or autocomplete combo boxes, tri-state checkboxes, toggle switches,
 visual group boxes, multi-selection, item payloads, sorting, virtualization,

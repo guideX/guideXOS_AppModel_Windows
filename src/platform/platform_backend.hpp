@@ -11,6 +11,7 @@ namespace guidexos::appmodel::detail {
 struct ApplicationState;
 struct ControlState;
 struct LayoutState;
+struct TimerState;
 struct WindowState;
 
 class PlatformBackend {
@@ -24,6 +25,8 @@ public:
     virtual void RefreshMenuBar(const std::shared_ptr<WindowState>& window) = 0;
     virtual void ResizeWindow(const std::shared_ptr<WindowState>& window) = 0;
     virtual void CloseWindow(const std::shared_ptr<WindowState>& window) noexcept = 0;
+    virtual bool StartTimer(const std::shared_ptr<TimerState>& timer) = 0;
+    virtual void StopTimer(const std::shared_ptr<TimerState>& timer) noexcept = 0;
     virtual int Run() = 0;
     virtual void RequestQuit(int exitCode) noexcept = 0;
     virtual void Shutdown() noexcept = 0;

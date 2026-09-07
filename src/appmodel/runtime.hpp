@@ -9,6 +9,7 @@
 #include "platform/platform_backend.hpp"
 
 #include <functional>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -158,6 +159,17 @@ struct StatusBarState {
     std::weak_ptr<ApplicationState> application;
 };
 
+struct TimerState {
+    TimerState(std::shared_ptr<ApplicationState> owner,
+               std::chrono::milliseconds initialInterval)
+        : application(std::move(owner)), interval(initialInterval) {}
+
+    std::weak_ptr<ApplicationState> application;
+    std::chrono::milliseconds interval;
+    bool running = false;
+    std::function<void()> onTick;
+};
+
 struct WindowState {
     explicit WindowState(std::shared_ptr<ApplicationState> owner)
         : application(owner) {}
@@ -293,6 +305,7 @@ void DispatchMenuItemAcceleratorInvocation(
 void DispatchMenuOpening(const std::shared_ptr<MenuState>& menu);
 void DispatchFilesDropped(const std::shared_ptr<WindowState>& window,
                           std::vector<std::string> paths);
+void DispatchTimerTick(const std::shared_ptr<TimerState>& timer);
 void RemoveRadioButtonFromGroup(const std::shared_ptr<ControlState>& control,
                                 bool dispatchCallback);
 void DestroyRadioGroup(const std::shared_ptr<RadioGroupState>& group) noexcept;

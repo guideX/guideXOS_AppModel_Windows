@@ -3,7 +3,7 @@
 ## Boundary
 
 ```text
-HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / DialogApp / ClipboardApp / FileDropApp / PolishApp
+HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
           |
           v
 Public guideXOS App Model API (include/guidexos/appmodel)
@@ -17,11 +17,12 @@ Platform-neutral runtime state and backend contract (src/appmodel, src/platform)
           |
           +--> Private Windows shell file-drop backend (src/platform/windows)
           +--> Private Windows common-controls chrome backend (src/platform/windows)
+          +--> Private Windows event-loop timer backend (src/platform/windows)
           |
           +--> Native desktop windows, controls, session clipboard, and shell file drops
 ```
 
-The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
 
 ## Process-wide text clipboard
 
@@ -192,6 +193,19 @@ command bubbling, or custom traversal policy in this milestone.
 The backend only posts its platform quit signal after a window binding that belongs to this backend has been removed and `ShouldQuitAfterWindowClosed()` confirms the configured neutral policy. An arbitrary native destruction cannot end another application or a non-final window. `Application::Quit()` is the separate explicit exit path and preserves its requested exit code.
 
 With the default policy, `Run()` also completes deterministically if called after there are no shown windows. With explicit shutdown, `Run()` requires a `Quit()` request. `Run()` and callbacks are UI-thread operations; this milestone has no cross-thread dispatch.
+
+### Application timers
+
+`Timer` is a repeating, application-owned event source. It stores a positive
+`std::chrono::milliseconds` interval and a replaceable `OnTick()` callback.
+`Start()` and `Stop()` are idempotent; changing the interval of a running timer
+restarts its schedule. Each callback is copied before synchronous dispatch, so
+it may stop or reconfigure the timer. Destruction, `Stop()`, and backend
+shutdown clear the native schedule. Timers do not create a background thread,
+do not keep `WhenLastWindowCloses` applications alive, and have no one-shot
+mode in this milestone.
+Windows may clamp or coalesce very short intervals, so this is an event-loop
+timer rather than a real-time scheduler.
 
 ## Close-request contract
 
@@ -561,6 +575,7 @@ backend native positioning
 - A root layout belongs to one window; a child layout belongs to one parent, and a control belongs to one layout. Layouts own nested layout state through shared ownership, while parent and window links are weak to avoid cycles. A closed window retains its root and can realize it again.
 - A MenuBar belongs to at most one window, while a Menu belongs to one MenuBar or parent Menu and a MenuItem belongs to one Menu. Parent menus retain child state. Replacing/clearing a bar or removing an entry detaches the child affinity; close/reopen retains the attached bar and callbacks.
 - A StatusBar is a shared model handle with one Window/application owner. Its UTF-8 text remains authoritative across close/reopen; replacement, clearing, or window destruction releases the window affinity and native status binding. Cross-window and cross-application attachment is rejected.
+- A Timer belongs to one Application. Its interval, running state, and callback are neutral model state; a running timer is scheduled by the backend and is stopped on public destruction or application shutdown.
 - ToolTip text belongs to the control model, has an 8 KiB UTF-8 bound, and is independent of measurement. The native per-window host and records are rebuilt from live controls, so setting text before realization, changing it while shown, clearing it, detaching a layout, and recreating a window cannot retain stale native records.
 - Menu callbacks are replaced by `OnInvoked`, cleared with `OnInvoked({})`, and cleared when the public `MenuItem` is destroyed. `Invoke()` and native selection dispatch only when the item is attached to a MenuBar and enabled. Duplicate labels are valid; duplicate shortcuts within one bar are rejected.
 - Direct self-insertion, indirect layout cycles, a second layout parent, a second window content owner, cross-application binding, and control insertion into a second layout are rejected with `std::logic_error`.
@@ -608,9 +623,15 @@ once, and nested text/control/menu changes are synchronous and depth-first.
 Native accelerator delivery invokes that same dispatcher; disabled or stale
 per-window command IDs are ignored.
 
+`Timer` ticks use the same event-loop boundary. A native timer message resolves
+only to the weak App Model timer state; the callback is copied before it runs,
+and a callback may stop, restart, change the interval, update controls, or
+request application shutdown without the backend retaining a native timer
+binding across user code.
+
 ## Backend contract
 
-`PlatformBackend` contains only neutral state pointers and operations to show, refresh windows/menus, resize, close, run, request quit, and shut down. The Windows implementation alone converts UTF-8 to UTF-16, creates native controls and ordinary menus, handles native messages and accelerators, calculates client-preserving frames, owns native handle association, synchronizes list mutations with narrow native operations plus a reset fallback, synchronizes combo items and selection through private drop-down messages, and calls `IsDialogMessageW` for narrow dialog-style Tab navigation. Shutdown destroys remaining bindings, clears native menu/accelerator state, and unregisters the private class idempotently.
+`PlatformBackend` contains only neutral state pointers and operations to show, refresh windows/menus, resize, close, start/stop timers, run, request quit, and shut down. The Windows implementation alone converts UTF-8 to UTF-16, creates native controls and ordinary menus, handles native messages and accelerators, calculates client-preserving frames, owns native handle association, synchronizes list mutations with narrow native operations plus a reset fallback, synchronizes combo items and selection through private drop-down messages, routes thread-owned timer messages, and calls `IsDialogMessageW` for narrow dialog-style Tab navigation. Shutdown destroys remaining bindings, clears timer/menu/accelerator state, and unregisters the private class idempotently.
 
 The Windows backend realizes the model's recursive placements without owning a
 second layout policy. Controls use the calculated rectangle in flattened

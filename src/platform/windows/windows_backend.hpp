@@ -31,6 +31,8 @@ public:
     void RefreshMenuBar(const std::shared_ptr<WindowState>& window) override;
     void ResizeWindow(const std::shared_ptr<WindowState>& window) override;
     void CloseWindow(const std::shared_ptr<WindowState>& window) noexcept override;
+    bool StartTimer(const std::shared_ptr<TimerState>& timer) override;
+    void StopTimer(const std::shared_ptr<TimerState>& timer) noexcept override;
     int Run() override;
     void RequestQuit(int exitCode) noexcept override;
     void Shutdown() noexcept override;
@@ -76,6 +78,8 @@ private:
                                 const ControlState& control);
     void LayoutControls(WindowBinding& binding);
     int GetStatusBarHeight(const WindowBinding& binding) const noexcept;
+    void HandleTimer(UINT_PTR timerId) noexcept;
+    UINT_PTR FindTimerId(const std::shared_ptr<TimerState>& timer) const noexcept;
     void HandleNativeDestroyed(HWND hwnd) noexcept;
     LRESULT HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
                           LPARAM lParam) noexcept;
@@ -90,8 +94,10 @@ private:
     bool shutdown_{false};
     int nextControlId_{1000};
     std::uint32_t nextMenuCommandId_{0x4000};
+    UINT_PTR nextTimerId_{1};
     bool commonControlsReady_{false};
     std::map<HWND, std::unique_ptr<WindowBinding>> windows_;
+    std::unordered_map<UINT_PTR, std::weak_ptr<TimerState>> timers_;
 };
 
 } // namespace guidexos::appmodel::detail
