@@ -40,6 +40,7 @@ enum class ControlType {
     CheckBox,
     RadioButton,
     ComboBox,
+    ProgressBar,
 };
 
 class TextBoxRef final {
@@ -88,6 +89,25 @@ private:
     friend class ControlRef;
 };
 
+class ProgressBarRef final {
+public:
+    ProgressBarRef() noexcept = default;
+
+    bool IsValid() const noexcept;
+    int GetMinimum() const noexcept;
+    int GetMaximum() const noexcept;
+    int GetValue() const noexcept;
+    bool IsIndeterminate() const noexcept;
+
+private:
+    explicit ProgressBarRef(std::weak_ptr<detail::ControlState> state) noexcept
+        : state_(std::move(state)) {}
+
+    std::weak_ptr<detail::ControlState> state_;
+
+    friend class ControlRef;
+};
+
 class ControlRef final {
 public:
     ControlRef() noexcept = default;
@@ -98,11 +118,12 @@ public:
     bool IsEnabled() const noexcept;
     bool Focus() const noexcept;
 
-    // TextBox and TextArea are the narrow capability views exposed for text
-    // editing. Other control kinds return an empty view; no generic command
-    // interface is implied.
+    // TextBox and TextArea expose narrow editing capability views, while
+    // ProgressBar exposes a narrow state view. No generic command interface
+    // is implied for other control kinds.
     std::optional<TextBoxRef> AsTextBox() const noexcept;
     std::optional<TextAreaRef> AsTextArea() const noexcept;
+    std::optional<ProgressBarRef> AsProgressBar() const noexcept;
 
     friend bool operator==(const ControlRef&, const ControlRef&) noexcept;
     friend bool operator!=(const ControlRef&, const ControlRef&) noexcept;
@@ -122,6 +143,7 @@ private:
     friend class CheckBox;
     friend class RadioButton;
     friend class ComboBox;
+    friend class ProgressBar;
 };
 
 class Label final {
@@ -371,6 +393,44 @@ public:
     // current, and receives a copy of the new optional index.
     void OnSelectionChanged(
         std::function<void(std::optional<std::size_t>)> callback);
+
+private:
+    std::shared_ptr<detail::ControlState> state_;
+
+    friend class Layout;
+};
+
+class ProgressBar final {
+public:
+    ProgressBar();
+    ~ProgressBar();
+
+    ProgressBar(const ProgressBar&) = delete;
+    ProgressBar& operator=(const ProgressBar&) = delete;
+    ProgressBar(ProgressBar&&) = delete;
+    ProgressBar& operator=(ProgressBar&&) = delete;
+
+    // The model always preserves minimum <= value <= maximum. If a range
+    // endpoint would cross the other endpoint, it is clamped to that endpoint;
+    // changing an endpoint also clamps the current value into the new range.
+    void SetMinimum(int minimum);
+    int GetMinimum() const noexcept;
+    void SetMaximum(int maximum);
+    int GetMaximum() const noexcept;
+    void SetValue(int value);
+    int GetValue() const noexcept;
+
+    // Indeterminate mode changes only the presentation. The configured range
+    // and value remain stored and are restored when determinate mode resumes.
+    void SetIndeterminate(bool indeterminate);
+    bool IsIndeterminate() const noexcept;
+
+    void SetToolTip(std::string text);
+    const std::string& GetToolTip() const noexcept;
+    ControlRef GetControlRef() const noexcept;
+
+    void SetEnabled(bool enabled);
+    bool IsEnabled() const noexcept;
 
 private:
     std::shared_ptr<detail::ControlState> state_;

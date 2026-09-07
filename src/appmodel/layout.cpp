@@ -77,6 +77,10 @@ void Layout::Add(ListBox& listBox, LayoutSizing sizing) {
     AddControlToLayout(state_, listBox.state_, sizing);
 }
 
+void Layout::Add(ProgressBar& progressBar, LayoutSizing sizing) {
+    AddControlToLayout(state_, progressBar.state_, sizing);
+}
+
 void Layout::Add(RadioButton& radioButton, LayoutSizing sizing) {
     AddControlToLayout(state_, radioButton.state_, sizing);
 }

@@ -5,6 +5,7 @@
 #include "text_index.hpp"
 #include "text_validation.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -102,6 +103,15 @@ std::shared_ptr<detail::ControlState> LockTextArea(
     return state;
 }
 
+std::shared_ptr<detail::ControlState> LockProgressBar(
+    const std::weak_ptr<detail::ControlState>& weakState) noexcept {
+    auto state = weakState.lock();
+    if (!state || state->kind != detail::ControlKind::ProgressBar) {
+        return nullptr;
+    }
+    return state;
+}
+
 ControlType GetControlType(detail::ControlKind kind) noexcept {
     switch (kind) {
     case detail::ControlKind::Label: return ControlType::Label;
@@ -112,6 +122,7 @@ ControlType GetControlType(detail::ControlKind kind) noexcept {
     case detail::ControlKind::CheckBox: return ControlType::CheckBox;
     case detail::ControlKind::RadioButton: return ControlType::RadioButton;
     case detail::ControlKind::ComboBox: return ControlType::ComboBox;
+    case detail::ControlKind::ProgressBar: return ControlType::ProgressBar;
     }
     return ControlType::None;
 }
@@ -176,6 +187,30 @@ void TextBoxRef::DeleteSelection() const {
 
 bool TextAreaRef::IsValid() const noexcept {
     return static_cast<bool>(LockTextArea(state_));
+}
+
+bool ProgressBarRef::IsValid() const noexcept {
+    return static_cast<bool>(LockProgressBar(state_));
+}
+
+int ProgressBarRef::GetMinimum() const noexcept {
+    const auto state = LockProgressBar(state_);
+    return state ? state->minimum : 0;
+}
+
+int ProgressBarRef::GetMaximum() const noexcept {
+    const auto state = LockProgressBar(state_);
+    return state ? state->maximum : 0;
+}
+
+int ProgressBarRef::GetValue() const noexcept {
+    const auto state = LockProgressBar(state_);
+    return state ? state->value : 0;
+}
+
+bool ProgressBarRef::IsIndeterminate() const noexcept {
+    const auto state = LockProgressBar(state_);
+    return state && state->indeterminate;
 }
 
 bool TextAreaRef::HasSelection() const noexcept {
@@ -263,6 +298,14 @@ std::optional<TextAreaRef> ControlRef::AsTextArea() const noexcept {
         return std::nullopt;
     }
     return TextAreaRef{state};
+}
+
+std::optional<ProgressBarRef> ControlRef::AsProgressBar() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::ProgressBar) {
+        return std::nullopt;
+    }
+    return ProgressBarRef{state};
 }
 
 bool operator==(const ControlRef& left, const ControlRef& right) noexcept {
@@ -884,6 +927,81 @@ bool ComboBox::IsEnabled() const noexcept {
 void ComboBox::OnSelectionChanged(
     std::function<void(std::optional<std::size_t>)> callback) {
     state_->onSelectionChanged = std::move(callback);
+}
+
+ProgressBar::ProgressBar()
+    : state_(std::make_shared<detail::ControlState>(
+          detail::ControlKind::ProgressBar, std::string{})) {}
+
+ProgressBar::~ProgressBar() = default;
+
+void ProgressBar::SetMinimum(int minimum) {
+    const int nextMinimum = std::min(minimum, state_->maximum);
+    const int nextValue = std::max(state_->value, nextMinimum);
+    if (state_->minimum == nextMinimum && state_->value == nextValue) return;
+    state_->minimum = nextMinimum;
+    state_->value = nextValue;
+    detail::NotifyControlChanged(state_);
+}
+
+int ProgressBar::GetMinimum() const noexcept {
+    return state_->minimum;
+}
+
+void ProgressBar::SetMaximum(int maximum) {
+    const int nextMaximum = std::max(maximum, state_->minimum);
+    const int nextValue = std::min(state_->value, nextMaximum);
+    if (state_->maximum == nextMaximum && state_->value == nextValue) return;
+    state_->maximum = nextMaximum;
+    state_->value = nextValue;
+    detail::NotifyControlChanged(state_);
+}
+
+int ProgressBar::GetMaximum() const noexcept {
+    return state_->maximum;
+}
+
+void ProgressBar::SetValue(int value) {
+    const int nextValue = std::clamp(value, state_->minimum, state_->maximum);
+    if (state_->value == nextValue) return;
+    state_->value = nextValue;
+    detail::NotifyControlChanged(state_);
+}
+
+int ProgressBar::GetValue() const noexcept {
+    return state_->value;
+}
+
+void ProgressBar::SetIndeterminate(bool indeterminate) {
+    if (state_->indeterminate == indeterminate) return;
+    state_->indeterminate = indeterminate;
+    detail::NotifyControlChanged(state_);
+}
+
+bool ProgressBar::IsIndeterminate() const noexcept {
+    return state_->indeterminate;
+}
+
+void ProgressBar::SetToolTip(std::string text) {
+    SetControlToolTip(state_, std::move(text));
+}
+
+const std::string& ProgressBar::GetToolTip() const noexcept {
+    return state_->toolTip;
+}
+
+ControlRef ProgressBar::GetControlRef() const noexcept {
+    return ControlRef{state_};
+}
+
+void ProgressBar::SetEnabled(bool enabled) {
+    if (state_->enabled == enabled) return;
+    state_->enabled = enabled;
+    detail::NotifyControlChanged(state_);
+}
+
+bool ProgressBar::IsEnabled() const noexcept {
+    return state_->enabled;
 }
 
 CheckBox::CheckBox(std::string text, bool checked)

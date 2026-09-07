@@ -30,6 +30,7 @@ enum class ControlKind {
     TextArea,
     ListBox,
     ComboBox,
+    ProgressBar,
     RadioButton,
 };
 
@@ -76,6 +77,10 @@ struct ControlState {
     std::optional<std::size_t> selectedIndex;
     bool checked = false;
     bool selected = false;
+    int minimum = 0;
+    int maximum = 100;
+    int value = 0;
+    bool indeterminate = false;
     bool enabled = true;
     bool readOnly = false;
     bool wordWrap = true;

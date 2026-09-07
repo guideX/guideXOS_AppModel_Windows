@@ -644,6 +644,8 @@ public:
                 const int height = std::max(28, AddMetric(fontHeight, 8));
                 return {{220, height}, {112, height}};
             }
+            case ControlKind::ProgressBar:
+                return {{220, 22}, {96, 22}};
             }
         } catch (...) {
             // Native realization is an optimization. A valid neutral
@@ -1156,6 +1158,10 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
                 SynchronizeComboBox(current->children[index], *control);
                 continue;
             }
+            if (control->kind == ControlKind::ProgressBar) {
+                SynchronizeProgressBar(current->children[index], *control);
+                continue;
+            }
             if (control->kind == ControlKind::CheckBox) {
                 SynchronizeCheckBox(current->children[index], *control);
             } else if (control->kind == ControlKind::RadioButton) {
@@ -1296,12 +1302,12 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         const bool isTextArea = control->kind == ControlKind::TextArea;
         const bool isListBox = control->kind == ControlKind::ListBox;
         const bool isComboBox = control->kind == ControlKind::ComboBox;
+        const bool isProgressBar = control->kind == ControlKind::ProgressBar;
         const bool isRadioButton = control->kind == ControlKind::RadioButton;
+        const bool isInteractive = isButton || isCheckBox || isTextBox ||
+            isTextArea || isListBox || isComboBox || isRadioButton;
         DWORD style = WS_CHILD | WS_VISIBLE |
-            (isButton || isCheckBox || isTextBox || isTextArea || isListBox ||
-             isComboBox || isRadioButton
-                 ? WS_TABSTOP
-                 : SS_LEFT) |
+            (isInteractive ? WS_TABSTOP : (isProgressBar ? 0 : SS_LEFT)) |
             (isCheckBox ? BS_AUTOCHECKBOX | BS_LEFT | BS_VCENTER : 0) |
             (isRadioButton ? BS_AUTORADIOBUTTON | BS_LEFT | BS_VCENTER : 0) |
             (isTextBox ? ES_AUTOHSCROLL | ES_LEFT : 0) |
@@ -1311,7 +1317,8 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             (isTextArea && control->readOnly ? ES_READONLY : 0) |
             (isListBox ? LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | WS_VSCROLL : 0) |
             (isComboBox ? CBS_DROPDOWNLIST | CBS_HASSTRINGS | CBS_AUTOHSCROLL |
-                         WS_VSCROLL : 0);
+                         WS_VSCROLL : 0) |
+            (isProgressBar ? PBS_MARQUEE : 0);
         if (isRadioButton) {
             const auto group = control->radioGroup.lock();
             if (group != previousRadioGroup) style |= WS_GROUP;
@@ -1329,7 +1336,8 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
                 (isCheckBox || isRadioButton ? L"BUTTON" :
                  (isTextBox || isTextArea ? L"EDIT" :
                   (isListBox ? L"LISTBOX" :
-                   (isComboBox ? L"COMBOBOX" : L"STATIC")))),
+                   (isComboBox ? L"COMBOBOX" :
+                    (isProgressBar ? PROGRESS_CLASSW : L"STATIC"))))),
             Utf8ToWide(control->text).c_str(),
             style,
             0,
@@ -1573,6 +1581,25 @@ void WindowsBackend::SynchronizeComboBox(ChildBinding& binding,
         SendMessageW(binding.hwnd, CB_SETCURSEL,
                      static_cast<WPARAM>(desiredSelection), 0);
     }
+}
+
+void WindowsBackend::SynchronizeProgressBar(ChildBinding& binding,
+                                            const ControlState& control) {
+    if (control.kind != ControlKind::ProgressBar) return;
+
+    // The portable model uses the same bounded signed integer domain as the
+    // native 32-bit progress messages. No application-visible conversion is
+    // needed, and the model has already enforced minimum <= value <= maximum.
+    SendMessageW(binding.hwnd, PBM_SETRANGE32,
+                 static_cast<WPARAM>(static_cast<std::intptr_t>(
+                     control.minimum)),
+                 static_cast<LPARAM>(control.maximum));
+    SendMessageW(binding.hwnd, PBM_SETPOS,
+                 static_cast<WPARAM>(static_cast<std::intptr_t>(control.value)),
+                 0);
+    SendMessageW(binding.hwnd, PBM_SETMARQUEE,
+                 static_cast<WPARAM>(control.indeterminate ? TRUE : FALSE),
+                 static_cast<LPARAM>(control.indeterminate ? 50 : 0));
 }
 
 void WindowsBackend::SynchronizeRadioButton(ChildBinding& binding,

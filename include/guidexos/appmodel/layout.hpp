@@ -11,6 +11,7 @@ class CheckBox;
 class ComboBox;
 class Label;
 class ListBox;
+class ProgressBar;
 class RadioButton;
 class TextArea;
 class TextBox;
@@ -68,6 +69,8 @@ public:
     // ListBox keeps the legacy vertical behavior by expanding by default;
     // pass Natural explicitly when a content-sized list is desired.
     void Add(ListBox& listBox, LayoutSizing sizing = LayoutSizing::Expand);
+    void Add(ProgressBar& progressBar,
+             LayoutSizing sizing = LayoutSizing::Natural);
     void Add(RadioButton& radioButton,
              LayoutSizing sizing = LayoutSizing::Natural);
     void Add(TextBox& textBox, LayoutSizing sizing = LayoutSizing::Natural);

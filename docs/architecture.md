@@ -3,7 +3,7 @@
 ## Boundary
 
 ```text
-HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
+HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / ProgressBarApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
           |
           v
 Public guideXOS App Model API (include/guidexos/appmodel)
@@ -22,7 +22,7 @@ Platform-neutral runtime state and backend contract (src/appmodel, src/platform)
           +--> Native desktop windows, controls, session clipboard, and shell file drops
 ```
 
-The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
 
 ## Process-wide text clipboard
 
@@ -235,6 +235,36 @@ mode in this milestone.
 Windows may clamp or coalesce very short intervals, so this is an event-loop
 timer rather than a real-time scheduler.
 
+### ProgressBar state and realization
+
+`ProgressBar` follows the same shared `ControlState` and layout-binding path as
+the other content controls. Its portable state is an integer minimum,
+maximum, value, indeterminate flag, and enabled flag. Construction defaults to
+`0..100`, value `0`, and determinate mode. The model clamps `SetValue()` to
+the current range. Endpoint setters clamp a crossing endpoint to the other
+endpoint and then clamp the value, so the invariant
+`minimum <= value <= maximum` is never delegated to the backend.
+
+Indeterminate mode changes presentation only. Range and value mutations remain
+valid while it is active, and returning to determinate mode presents the
+current stored value. `NotifyControlChanged()` refreshes the realized child,
+so setters have identical semantics before and after native realization.
+`ProgressBar` participates in natural/minimum layout measurement and can
+consume extra main-axis space with `LayoutSizing::Expand`; it is deliberately
+not a focus or Tab target. `ControlRef::GetType()` and the narrow
+`AsProgressBar()` view use the same weak model-state lifetime behavior as the
+existing control references.
+
+The Windows backend creates a private common-controls progress realization and
+maps the already-clamped integer model range and position directly into its
+native state. Marquee activation is also private to the backend. The existing
+common-controls initialization covers this realization; no native handle,
+style, message, or range representation crosses the public header boundary.
+The backend recreates the child on close/reopen and replays the retained model
+state. `ProgressBarApp` proves composition with the existing repeating
+event-loop `Timer`; it uses a separate `Label` for percentage text and does
+not add worker-thread or asynchronous job infrastructure.
+
 ## Close-request contract
 
 `Window::OnClosing(std::function<void(WindowClosingEvent&)>)` is the public,
@@ -284,7 +314,7 @@ Every `WindowsBackend` instance owns a registry keyed by its own native top-leve
 
 There is no global current-window pointer. A `WM_COMMAND`-equivalent notification is first resolved through the owning top-level binding and then through that binding's child handle. A command ID is never used to search another window. Destroying one top-level binding removes only its own children and registry entry; reopening the logical window creates a new binding and new native child handles.
 
-The child binding collection includes private `EDIT` realizations for `TextBox` and `TextArea`, ordinary single-selection `LISTBOX` realizations for `ListBox`, non-editable `COMBOBOX` realizations for `ComboBox`, and native `BUTTON` realizations for buttons, checkboxes, and radio buttons. Button notifications use the backend's private command IDs; edit, list, combo, and choice notifications are routed by the originating child handle and do not need a public control ID. `EN_CHANGE`, native edit selection/caret reads and writes, multiline CRLF conversion, `LBN_SELCHANGE`, `CBN_SELCHANGE`, `BN_CLICKED`, `BM_GETCHECK`, `BM_SETCHECK`, `WM_GETTEXT`, list/combo item messages, UTF-16 conversion, and native synchronization guards remain entirely inside the Windows backend, so multiple controls, groups, and windows cannot cross-route their events.
+The child binding collection includes private `EDIT` realizations for `TextBox` and `TextArea`, ordinary single-selection `LISTBOX` realizations for `ListBox`, non-editable `COMBOBOX` realizations for `ComboBox`, private progress realizations for `ProgressBar`, and native `BUTTON` realizations for buttons, checkboxes, and radio buttons. Button notifications use the backend's private command IDs; edit, list, combo, choice, and progress synchronization are routed by the originating child handle and do not need a public control ID. `EN_CHANGE`, native edit selection/caret reads and writes, multiline CRLF conversion, `LBN_SELCHANGE`, `CBN_SELCHANGE`, choice synchronization, progress range/position/marquee synchronization, UTF-16 conversion, and native synchronization guards remain entirely inside the Windows backend, so multiple controls, groups, and windows cannot cross-route their events.
 
 Process-level class registration is the only intentionally shared native concern. The backend, native handles, control collections, layout realization, and destruction state are per application/window instance.
 
@@ -451,8 +481,8 @@ save failure keep the window open.
 ## ToolTip and StatusBar chrome
 
 ToolTip text is stored directly on `ControlState` and is intentionally not a
-layout input. `Button`, `TextBox`, `TextArea`, `ListBox`, `CheckBox`, `RadioButton`, and
-`ComboBox` expose `SetToolTip()`/`GetToolTip()`; `Label` follows the same small
+layout input. `Button`, `TextBox`, `TextArea`, `ListBox`, `CheckBox`, `RadioButton`,
+`ComboBox`, and `ProgressBar` expose `SetToolTip()`/`GetToolTip()`; `Label` follows the same small
 surface. Setters validate UTF-8 and reject values over 8 KiB before changing
 the model. Empty text means no registration. The state remains useful while a
 control is detached, and a later realization registers its current text.
@@ -739,6 +769,17 @@ close, and orphan-process cleanup. Tests can restore only an original
 supported text value; arbitrary non-text clipboard formats are not preserved.
 
 `appmodel_choice_model_test` covers default and initial checkbox state, changed/unchanged transitions, callback replacement/removal, enabled state, self/cross-control changes, Unicode, explicit group membership, exclusivity, callback order, group queries during callbacks, independent groups, reentrant selection, removal/destruction, and cross-application rejection. `appmodel_choice_lifecycle_test` covers two-window native routing, disabled native rejection, programmatic disabled updates, independent groups, close/reopen, callback close of both windows, and retained state. `choice_controls_gui_smoke.ps1` drives three ChoiceControlsApp cycles covering visible and initial choices, native and programmatic checkbox changes, focus/Tab and Space paths, native/programmatic radio selection, independent groups, UTF-8 labels, disabled interaction, repeated cycles, close-after-dispatch, and process cleanup. The GUI scripts report when deterministic native-message/focus fallback is used; physical mouse and keyboard validation should then be checked manually.
+`appmodel_progress_bar_model_test` covers defaults, integer range/value
+clamping, invalid endpoint crossings, zero-width ranges, determinate and
+indeterminate transitions, retained value updates, enabled state, references,
+non-focus behavior, pre/post-realization mutation, independent models,
+destruction, close/reopen, and application shutdown. The companion
+`appmodel_progress_bar_lifecycle_test` inspects the private native child,
+range and position synchronization, runtime mutations, marquee message path,
+enabled state, and native destruction/recreation. `progress_bar_gui_smoke.ps1`
+drives five Debug and five Release ProgressBarApp cycles covering advancing
+determinate values, completion, Reset, indeterminate switching, restart, and
+clean process exit.
 `profile_manager_model_test` covers serialization/deserialization, Unicode,
 newlines, duplicate names, all modes and enabled states, version and malformed
 input rejection, parser bounds, parse-failure isolation, dirty transitions,

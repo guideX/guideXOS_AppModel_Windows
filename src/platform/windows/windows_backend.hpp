@@ -76,6 +76,8 @@ private:
                                        const ControlState& control);
     void SynchronizeListBox(ChildBinding& binding, const ControlState& control);
     void SynchronizeComboBox(ChildBinding& binding, const ControlState& control);
+    void SynchronizeProgressBar(ChildBinding& binding,
+                                const ControlState& control);
     void SynchronizeRadioButton(ChildBinding& binding,
                                 const ControlState& control);
     void LayoutControls(WindowBinding& binding);

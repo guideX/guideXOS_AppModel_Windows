@@ -171,6 +171,8 @@ LayoutMeasurement NeutralControlMeasurement(const ControlState& control) {
         return {{220, 140}, {96, 48}};
     case ControlKind::ComboBox:
         return {{220, 28}, {112, 28}};
+    case ControlKind::ProgressBar:
+        return {{220, 22}, {96, 22}};
     }
     return {};
 }
@@ -793,7 +795,8 @@ void ClearNativeFocus(const std::shared_ptr<WindowState>& window,
 }
 
 bool FocusControl(const std::shared_ptr<ControlState>& control) noexcept {
-    if (!control || control->kind == ControlKind::Label || !control->enabled) {
+    if (!control || control->kind == ControlKind::Label ||
+        control->kind == ControlKind::ProgressBar || !control->enabled) {
         return false;
     }
     const auto window = FindOwningWindow(control);
