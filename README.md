@@ -1,6 +1,6 @@
 # guideXOS App Model for Windows
 
-This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, horizontal `Slider`, portable file-backed `Image` controls, `TabView` pages, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, decoded raster surfaces, and the Windows Unicode clipboard while keeping platform handles and messages private.
+This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, horizontal `Slider`, portable file-backed `Image` controls, vertical `ScrollView` viewports, `TabView` pages, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, decoded raster surfaces, and the Windows Unicode clipboard while keeping platform handles and messages private.
 
 ## Current milestone
 
@@ -23,6 +23,7 @@ The current vertical slice demonstrates:
 - portable horizontal sliders with signed clamped integer ranges and user-change callbacks
 - portable file-backed raster Images with PNG/JPEG decoding, alpha, and Fit/Fill/Stretch modes
 - portable TabView pages with nested layouts, selected-page callbacks, and preserved page state
+- portable vertical ScrollView viewports with independent content extent, native clipping, wheel input, and scrollbar synchronization
 - deterministic choice callbacks across reentrancy, multiple windows, and close/reopen
 - nested vertical and horizontal layouts with natural, expanding, and spacer items
 - platform-neutral spacing, padding, geometry calculation, and deterministic resize behavior
@@ -82,6 +83,9 @@ layouts from existing controls and demonstrates state preservation while
 switching pages. `ImageApp` is the focused portable raster-image sample; it
 loads deterministic PNG/JPEG fixtures, changes scale mode, clears/replaces its
 source, and uses the same Image inside ordinary layouts.
+`ScrollViewApp` is the focused scrollable-settings sample; it nests a
+ScrollView inside a TabView page, composes existing controls and an Image,
+and intentionally gives the content a larger extent than its viewport.
 
 ## Composable layouts
 
@@ -540,6 +544,7 @@ build\Debug\ProgressBarApp.exe
 build\Debug\SliderApp.exe
 build\Debug\TabViewApp.exe
 build\Debug\ImageApp.exe
+build\Debug\ScrollViewApp.exe
 build\Debug\ProfileManagerApp.exe
 build\Debug\MenuApp.exe
 build\Debug\DialogApp.exe
@@ -575,6 +580,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\polish_gui_smoke.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\timer_gui_smoke.ps1 -Executable .\build\Debug\TimerApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\tab_view_gui_smoke.ps1 -Executable .\build\Debug\TabViewApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\image_gui_smoke.ps1 -Executable .\build\Debug\ImageApp.exe -Cycles 5
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\scroll_view_gui_smoke.ps1 -Executable .\build\Debug\ScrollViewApp.exe -Cycles 5
 ```
 
 These scripts drive the real executables and real native windows. The
@@ -740,8 +746,8 @@ default; `false` enables private native horizontal scrolling while vertical
 scrolling remains available in both modes. Both properties can be changed
 before or after realization. A TextArea has a multi-row natural/minimum
 measurement and can be marked `LayoutSizing::Expand` to consume available
-vertical space. Rich text, undo/redo, grapheme-aware selection, a selection
-changed event, and a general-purpose scroll container remain out of scope.
+vertical space. Rich text, undo/redo, grapheme-aware selection, and a
+selection changed event remain out of scope.
 
 ## Platform-neutral focus and routed edit commands
 
@@ -1083,6 +1089,53 @@ blending entirely inside `src/platform/windows`; no public header contains a
 Windows image type. Image controls also compose with TabView pages: inactive
 page children are hidden and the decoded model state survives switching and
 close/reopen.
+
+## ScrollView
+
+`ScrollView` is a portable vertical viewport. Its `ContentLayout()` is an
+ordinary nested `Layout`, so existing controls, child layouts, Images, and
+TabViews retain their normal APIs and model state while the native viewport
+moves:
+
+```cpp
+TabView tabs;
+auto settings = tabs.AddTab("Settings");
+ScrollView scroll;
+Label heading("Profile");
+TextBox profile("guideXOS");
+Image preview;
+TextArea notes("Persistent notes");
+
+scroll.ContentLayout().Add(heading);
+scroll.ContentLayout().Add(profile);
+scroll.ContentLayout().Add(preview);
+scroll.ContentLayout().Add(notes, LayoutSizing::Expand);
+settings.GetLayout().Add(scroll, LayoutSizing::Expand);
+
+Layout root;
+root.Add(tabs, LayoutSizing::Expand);
+window.SetContent(root);
+```
+
+The viewport and content extent are distinct. `GetViewportSize()` reports the
+space assigned by the parent layout, while `GetContentSize()` reports the
+measured nested content. `GetMaximumVerticalOffset()` is
+`max(0, content.height - viewport.height)`. `SetVerticalOffset()` clamps to
+that range after realization and retains a pre-realization request until the
+viewport is known. `GetControlRef().AsScrollView()` provides a safe
+`ScrollViewRef` view.
+
+The Windows backend realizes one private child host with real clipping and a
+private vertical scrollbar. Wheel input over the viewport or its child
+controls, line/page/thumb scrollbar actions, programmatic offsets, and resize
+all synchronize back to AppModel state. Content controls are native children
+of the host, so offscreen controls do not paint over neighboring UI and remain
+interactive when they become visible. Closing, reopening, switching TabView
+pages, and replacing an Image preserve logical content state.
+
+Horizontal scrolling, inertial/touch scrolling, and automatic keyboard
+scroll-to-focused-child are deferred. Child controls retain their own keyboard
+semantics; the ScrollView does not consume their arrow-key navigation.
 
 ## Application timers
 

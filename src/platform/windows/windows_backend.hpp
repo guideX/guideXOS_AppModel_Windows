@@ -58,6 +58,7 @@ private:
 
     bool RegisterWindowClass();
     bool RegisterImageWindowClass();
+    bool RegisterScrollViewClass();
     WindowBinding* FindWindowBinding(HWND hwnd) noexcept;
     WindowBinding* FindWindowBinding(const std::shared_ptr<WindowState>& window) noexcept;
     void RebuildControls(WindowBinding& binding);
@@ -92,6 +93,8 @@ private:
     void HandleTimer(UINT_PTR timerId) noexcept;
     UINT_PTR FindTimerId(const std::shared_ptr<TimerState>& timer) const noexcept;
     void HandleNativeDestroyed(HWND hwnd) noexcept;
+    void HandleScrollViewMessage(HWND hwnd, UINT message, WPARAM wParam,
+                                 LPARAM lParam) noexcept;
     LRESULT HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
                           LPARAM lParam) noexcept;
 
@@ -100,6 +103,9 @@ private:
     static LRESULT CALLBACK ImageWindowProcedure(HWND hwnd, UINT message,
                                                  WPARAM wParam,
                                                  LPARAM lParam) noexcept;
+    static LRESULT CALLBACK ScrollViewWindowProcedure(HWND hwnd, UINT message,
+                                                      WPARAM wParam,
+                                                      LPARAM lParam) noexcept;
 
     struct ComInitialization;
     struct NativeImageDecoder;
@@ -108,8 +114,10 @@ private:
     HINSTANCE instance_{};
     ATOM classAtom_{};
     ATOM imageClassAtom_{};
+    ATOM scrollViewClassAtom_{};
     bool registeredClass_{false};
     bool imageClassRegistered_{false};
+    bool scrollViewClassRegistered_{false};
     bool shutdown_{false};
     int nextControlId_{1000};
     std::uint32_t nextMenuCommandId_{0x4000};

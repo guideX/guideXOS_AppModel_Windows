@@ -46,6 +46,11 @@ bool LayoutContainsControl(const std::shared_ptr<LayoutState>& layout,
                 }
             }
         }
+        if (item.control && item.control->kind == ControlKind::ScrollView &&
+            item.control->scrollContent &&
+            LayoutContainsControl(item.control->scrollContent, control)) {
+            return true;
+        }
         if (item.layout && LayoutContainsControl(item.layout, control)) return true;
     }
     return false;
@@ -64,6 +69,11 @@ bool LayoutContainsLayout(const std::shared_ptr<LayoutState>& layout,
                     return true;
                 }
             }
+        }
+        if (item.control && item.control->kind == ControlKind::ScrollView &&
+            item.control->scrollContent &&
+            LayoutContainsLayout(item.control->scrollContent, target)) {
+            return true;
         }
     }
     return false;
@@ -209,6 +219,11 @@ LayoutMeasurement NeutralControlMeasurement(const ControlState& control) {
             return {{control.imageWidth, control.imageHeight}, {1, 1}};
         }
         return {{220, 140}, {1, 1}};
+    case ControlKind::ScrollView:
+        // The viewport has a bounded preferred size. Its content is measured
+        // independently by the backend so a tall page does not consume the
+        // viewport's allocation before a scroll range is computed.
+        return {{360, 260}, {180, 120}};
     }
     return {};
 }
@@ -486,6 +501,12 @@ void ValidateLayoutBinding(const std::shared_ptr<LayoutState>& layout,
                                           visiting, visited);
                 }
             }
+            if (item.control->kind == ControlKind::ScrollView &&
+                item.control->scrollContent) {
+                item.control->scrollContent->scrollViewOwner = item.control;
+                ValidateLayoutBinding(item.control->scrollContent, application,
+                                      visiting, visited);
+            }
         } else if (item.layout) {
             if (auto parent = item.layout->parent.lock(); parent && parent != layout) {
                 throw std::logic_error("A child Layout cannot belong to multiple parents");
@@ -516,6 +537,11 @@ void ApplyLayoutBinding(const std::shared_ptr<LayoutState>& layout,
                         ApplyLayoutBinding(page->layout, application);
                     }
                 }
+            }
+            if (item.control->kind == ControlKind::ScrollView &&
+                item.control->scrollContent) {
+                item.control->scrollContent->scrollViewOwner = item.control;
+                ApplyLayoutBinding(item.control->scrollContent, application);
             }
         } else if (item.layout) {
             ApplyLayoutBinding(item.layout, application);
@@ -793,6 +819,10 @@ void CollectAllControls(const std::shared_ptr<LayoutState>& layout,
     for (const auto& item : layout->children) {
         if (item.control) {
             controls.push_back(item.control);
+            if (item.control->kind == ControlKind::ScrollView &&
+                item.control->scrollContent) {
+                CollectAllControls(item.control->scrollContent, controls);
+            }
             if (item.control->kind == ControlKind::TabView &&
                 item.control->tabView) {
                 for (const auto& page : item.control->tabView->pages) {
@@ -803,6 +833,47 @@ void CollectAllControls(const std::shared_ptr<LayoutState>& layout,
             CollectAllControls(item.layout, controls);
         }
     }
+}
+
+std::shared_ptr<ControlState> FindOwningScrollView(
+    const std::shared_ptr<ControlState>& control) noexcept {
+    if (!control) return nullptr;
+    auto layout = control->layoutParent.lock();
+    while (layout) {
+        if (auto scrollView = layout->scrollViewOwner.lock()) {
+            return scrollView;
+        }
+        if (auto page = layout->tabPage.lock()) {
+            if (auto owner = page->owner.lock()) {
+                if (auto tabView = owner->control.lock()) {
+                    layout = tabView->layoutParent.lock();
+                    continue;
+                }
+            }
+        }
+        layout = layout->parent.lock();
+    }
+    return nullptr;
+}
+
+void UpdateScrollViewGeometry(
+    const std::shared_ptr<ControlState>& scrollView,
+    LayoutSize viewport, LayoutSize content) noexcept {
+    if (!scrollView || scrollView->kind != ControlKind::ScrollView) return;
+    viewport.width = std::max(0, viewport.width);
+    viewport.height = std::max(0, viewport.height);
+    content.width = std::max(viewport.width, std::max(0, content.width));
+    content.height = std::max(0, content.height);
+    const int maximum = content.height <= viewport.height
+        ? 0 : content.height - viewport.height;
+    scrollView->viewportSize = viewport;
+    scrollView->contentSize = content;
+    scrollView->maximumVerticalOffset = std::max(0, maximum);
+    scrollView->viewportKnown = true;
+    scrollView->verticalOffset = std::clamp(
+        scrollView->requestedVerticalOffset, 0,
+        scrollView->maximumVerticalOffset);
+    scrollView->requestedVerticalOffset = scrollView->verticalOffset;
 }
 
 bool ShowWindow(const std::shared_ptr<WindowState>& window) {

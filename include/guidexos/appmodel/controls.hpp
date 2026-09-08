@@ -57,6 +57,7 @@ enum class ControlType {
     Slider,
     TabView,
     Image,
+    ScrollView,
 };
 
 class TextBoxRef final {
@@ -179,6 +180,23 @@ private:
     friend class ControlRef;
 };
 
+class ScrollViewRef final {
+public:
+    ScrollViewRef() noexcept = default;
+
+    bool IsValid() const noexcept;
+    int GetVerticalOffset() const noexcept;
+    int GetMaximumVerticalOffset() const noexcept;
+
+private:
+    explicit ScrollViewRef(std::weak_ptr<detail::ControlState> state) noexcept
+        : state_(std::move(state)) {}
+
+    std::weak_ptr<detail::ControlState> state_;
+
+    friend class ControlRef;
+};
+
 class ControlRef final {
 public:
     ControlRef() noexcept = default;
@@ -198,6 +216,7 @@ public:
     std::optional<SliderRef> AsSlider() const noexcept;
     std::optional<TabViewRef> AsTabView() const noexcept;
     std::optional<ImageRef> AsImage() const noexcept;
+    std::optional<ScrollViewRef> AsScrollView() const noexcept;
 
     friend bool operator==(const ControlRef&, const ControlRef&) noexcept;
     friend bool operator!=(const ControlRef&, const ControlRef&) noexcept;
@@ -221,6 +240,7 @@ private:
     friend class Slider;
     friend class TabView;
     friend class Image;
+    friend class ScrollView;
 };
 
 class Label final {

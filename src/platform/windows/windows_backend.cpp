@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <new>
 #include <mutex>
@@ -29,11 +30,19 @@ namespace {
 
 constexpr wchar_t kWindowClassName[] = L"guideXOS.AppModel.Windows.Foundation";
 constexpr wchar_t kImageWindowClassName[] = L"guideXOS.AppModel.Windows.Image";
+constexpr wchar_t kScrollViewWindowClassName[] =
+    L"guideXOS.AppModel.Windows.ScrollView";
 constexpr int kMinimumClientWidth = 320;
 constexpr int kMinimumClientHeight = 180;
 constexpr UINT kMaximumImageDimension = 16384;
 constexpr std::uint64_t kMaximumImagePixels = 64ULL * 1024ULL * 1024ULL;
 constexpr std::uint64_t kMaximumImageBytes = kMaximumImagePixels * 4ULL;
+
+struct NativeScrollViewContext {
+    WindowsBackend* backend = nullptr;
+    std::weak_ptr<WindowState> window;
+    std::weak_ptr<ControlState> model;
+};
 
 bool InitializeCommonControls() noexcept {
     static std::once_flag once;
@@ -577,6 +586,22 @@ void UpdateToolTipRect(TOOLINFOW& info, HWND parent, HWND child) noexcept {
     info.rect = RECT{topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
 }
 
+HWND FindScrollViewHost(HWND child) noexcept {
+    HWND current = child ? GetParent(child) : nullptr;
+    wchar_t className[128]{};
+    while (current) {
+        const int length = GetClassNameW(current, className,
+                                         static_cast<int>(std::size(className)));
+        if (length > 0 &&
+            std::wstring(className, static_cast<std::size_t>(length)) ==
+                kScrollViewWindowClassName) {
+            return current;
+        }
+        current = GetParent(current);
+    }
+    return nullptr;
+}
+
 LRESULT CALLBACK ControlSubclassProcedure(HWND hwnd, UINT message,
                                           WPARAM wParam, LPARAM lParam) noexcept {
     auto* state = static_cast<ControlSubclassState*>(
@@ -586,6 +611,13 @@ LRESULT CALLBACK ControlSubclassProcedure(HWND hwnd, UINT message,
     }
 
     ++state->activeCalls;
+    if (message == WM_MOUSEWHEEL) {
+        if (const HWND host = FindScrollViewHost(hwnd)) {
+            SendMessageW(host, message, wParam, lParam);
+            --state->activeCalls;
+            return 0;
+        }
+    }
     const WNDPROC previous = state->previous;
     const auto model = state->model;
     const auto window = state->window;
@@ -764,6 +796,8 @@ public:
                 return {{360, 260}, {180, 120}};
             case ControlKind::Image:
                 return GetNeutralControlMeasurement(control);
+            case ControlKind::ScrollView:
+                return {{360, 260}, {180, 120}};
             }
         } catch (...) {
             // Native realization is an optimization. A valid neutral
@@ -782,6 +816,7 @@ private:
 struct WindowsBackend::ChildBinding {
     std::weak_ptr<ControlState> model;
     HWND hwnd{};
+    HWND parent{};
     int commandId{};
     bool synchronizingText{false};
     bool synchronizingSelection{false};
@@ -794,6 +829,7 @@ struct WindowsBackend::ChildBinding {
     std::unique_ptr<NativeImageWindowContext> imageContext;
     std::string nativeImagePath;
     bool imageDecodeAttempted{false};
+    std::unique_ptr<NativeScrollViewContext> scrollContext;
 };
 
 struct WindowsBackend::ToolTipBinding {
@@ -921,7 +957,9 @@ WindowsBackend::~WindowsBackend() {
 }
 
 bool WindowsBackend::RegisterWindowClass() {
-    if (classAtom_ != 0) return RegisterImageWindowClass();
+    if (classAtom_ != 0) {
+        return RegisterImageWindowClass() && RegisterScrollViewClass();
+    }
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -935,13 +973,40 @@ bool WindowsBackend::RegisterWindowClass() {
     classAtom_ = RegisterClassExW(&windowClass);
     if (classAtom_ != 0) {
         registeredClass_ = true;
-        return RegisterImageWindowClass();
+        return RegisterImageWindowClass() && RegisterScrollViewClass();
     }
 
     if (GetLastError() == ERROR_CLASS_ALREADY_EXISTS &&
         GetClassInfoExW(instance_, kWindowClassName, &windowClass) != FALSE) {
         classAtom_ = 1;
-        return RegisterImageWindowClass();
+        return RegisterImageWindowClass() && RegisterScrollViewClass();
+    }
+    return false;
+}
+
+bool WindowsBackend::RegisterScrollViewClass() {
+    if (scrollViewClassAtom_ != 0) return true;
+
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.lpfnWndProc = &WindowsBackend::ScrollViewWindowProcedure;
+    windowClass.hInstance = instance_;
+    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    windowClass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    windowClass.lpszClassName = kScrollViewWindowClassName;
+
+    scrollViewClassAtom_ = RegisterClassExW(&windowClass);
+    if (scrollViewClassAtom_ != 0) {
+        scrollViewClassRegistered_ = true;
+        return true;
+    }
+
+    if (GetLastError() == ERROR_CLASS_ALREADY_EXISTS &&
+        GetClassInfoExW(instance_, kScrollViewWindowClassName,
+                        &windowClass) != FALSE) {
+        scrollViewClassAtom_ = 1;
+        return true;
     }
     return false;
 }
@@ -1282,7 +1347,7 @@ bool WindowsBackend::ShowWindow(const std::shared_ptr<WindowState>& window) {
         return true;
     }
 
-    const DWORD style = WS_OVERLAPPEDWINDOW;
+    const DWORD style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
     const DWORD extendedStyle = WS_EX_APPWINDOW;
     const bool hasMenu = window->menuBar && !window->menuBar->menus.empty();
     RECT desiredClient{0, 0, SaturatingDimension(window->width),
@@ -1537,7 +1602,15 @@ void WindowsBackend::ResizeWindow(const std::shared_ptr<WindowState>& window) {
 
 void WindowsBackend::RebuildControls(WindowBinding& binding) {
     for (const auto& child : binding.children) {
-        if (child.hwnd) DestroyWindow(child.hwnd);
+        if (child.hwnd && child.parent == binding.hwnd &&
+            IsWindow(child.hwnd) != FALSE) {
+            DestroyWindow(child.hwnd);
+        }
+    }
+    for (const auto& child : binding.children) {
+        if (child.hwnd && IsWindow(child.hwnd) != FALSE) {
+            DestroyWindow(child.hwnd);
+        }
     }
     binding.children.clear();
 
@@ -1561,10 +1634,12 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         const bool isRadioButton = control->kind == ControlKind::RadioButton;
         const bool isTabView = control->kind == ControlKind::TabView;
         const bool isImage = control->kind == ControlKind::Image;
+        const bool isScrollView = control->kind == ControlKind::ScrollView;
         const bool isInteractive = isButton || isCheckBox || isTextBox ||
             isTextArea || isListBox || isComboBox || isRadioButton || isSlider ||
             isTabView;
         DWORD style = WS_CHILD | WS_VISIBLE |
+            (isScrollView ? WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_VSCROLL : 0) |
             (isInteractive ? WS_TABSTOP : (isProgressBar || isImage ? 0 : SS_LEFT)) |
             (isCheckBox ? BS_AUTOCHECKBOX | BS_LEFT | BS_VCENTER : 0) |
             (isRadioButton ? BS_AUTORADIOBUTTON | BS_LEFT | BS_VCENTER : 0) |
@@ -1607,6 +1682,8 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             nativeClass = WC_TABCONTROLW;
         } else if (isImage) {
             nativeClass = kImageWindowClassName;
+        } else if (isScrollView) {
+            nativeClass = kScrollViewWindowClassName;
         }
 
         std::unique_ptr<NativeImageWindowContext> imageContext;
@@ -1614,31 +1691,53 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             imageContext = std::make_unique<NativeImageWindowContext>();
             imageContext->model = control;
         }
+        HWND parent = binding.hwnd;
+        if (const auto scrollView = FindOwningScrollView(control)) {
+            for (const auto& candidate : binding.children) {
+                if (candidate.model.lock() == scrollView) {
+                    parent = candidate.hwnd;
+                    break;
+                }
+            }
+        }
+        std::unique_ptr<NativeScrollViewContext> scrollContext;
+        if (isScrollView) {
+            scrollContext = std::make_unique<NativeScrollViewContext>();
+            scrollContext->backend = this;
+            scrollContext->window = binding.model;
+            scrollContext->model = control;
+        }
         HWND child = CreateWindowExW(
-            isTextBox || isTextArea || isListBox ? WS_EX_CLIENTEDGE : 0,
+            isScrollView ? WS_EX_CONTROLPARENT
+                         : (isTextBox || isTextArea || isListBox
+                                ? WS_EX_CLIENTEDGE : 0),
             nativeClass,
-            Utf8ToWide(control->text).c_str(),
+            isScrollView ? L"" : Utf8ToWide(control->text).c_str(),
             style,
             0,
             0,
             0,
             0,
-            binding.hwnd,
-            commandId != 0
+            parent,
+            !isScrollView && commandId != 0
                 ? reinterpret_cast<HMENU>(static_cast<INT_PTR>(commandId))
                 : nullptr,
             instance_,
-            imageContext ? imageContext.get() : nullptr);
+            scrollContext ? static_cast<void*>(scrollContext.get())
+                          : static_cast<void*>(imageContext.get()));
         if (!child) continue;
 
         SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
         EnableWindow(child, control->enabled ? TRUE : FALSE);
-        ChildBinding childBinding{control, child, commandId};
+        ChildBinding childBinding{control, child, parent, commandId};
         childBinding.nativeReadOnly = isTextArea && control->readOnly;
         childBinding.nativeWordWrap = !isTextArea || control->wordWrap;
         childBinding.imageContext = std::move(imageContext);
+        childBinding.scrollContext = std::move(scrollContext);
         binding.children.push_back(std::move(childBinding));
-        InstallControlSubclass(child, control, binding.model);
+        if (!isScrollView) {
+            InstallControlSubclass(child, control, binding.model);
+        }
     }
 }
 
@@ -2026,6 +2125,27 @@ void WindowsBackend::LayoutControls(WindowBinding& binding) {
             placements[key] = placement.bounds;
             visible.insert(key);
 
+            if (placement.control->kind == ControlKind::ScrollView &&
+                placement.control->scrollContent) {
+                const auto contentMeasurement = GetLayoutMeasurement(
+                    placement.control->scrollContent, &measurementProvider);
+                const LayoutSize viewport{
+                    std::max(0, placement.bounds.width),
+                    std::max(0, placement.bounds.height)};
+                const LayoutSize contentSize{
+                    std::max(viewport.width, contentMeasurement.natural.width),
+                    std::max(0, contentMeasurement.natural.height)};
+                UpdateScrollViewGeometry(placement.control, viewport,
+                                         contentSize);
+                placeLayout(
+                    placement.control->scrollContent,
+                    LayoutRect{placement.bounds.x,
+                               placement.bounds.y -
+                                   placement.control->verticalOffset,
+                               contentSize.width, contentSize.height});
+                continue;
+            }
+
             if (placement.control->kind != ControlKind::TabView ||
                 !placement.control->tabView || !placement.control->selectedIndex ||
                 *placement.control->selectedIndex >=
@@ -2057,6 +2177,27 @@ void WindowsBackend::LayoutControls(WindowBinding& binding) {
     placeLayout(binding.model->content,
                 LayoutRect{0, 0, clientWidth, contentHeight});
 
+    // The host's client area is a real clipping boundary. Update its native
+    // range after model geometry has been measured, before descendants are
+    // positioned relative to that host.
+    for (const auto& child : binding.children) {
+        const auto control = child.model.lock();
+        if (!control || control->kind != ControlKind::ScrollView || !child.hwnd) {
+            continue;
+        }
+        SCROLLINFO info{};
+        info.cbSize = sizeof(info);
+        info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+        info.nMin = 0;
+        info.nMax = control->contentSize.height > 0
+            ? control->contentSize.height - 1 : 0;
+        info.nPage = static_cast<UINT>(std::max(1, control->viewportSize.height));
+        info.nPos = control->verticalOffset;
+        SetScrollInfo(child.hwnd, SB_VERT, &info, TRUE);
+        ShowScrollBar(child.hwnd, SB_VERT,
+                      control->maximumVerticalOffset > 0 ? TRUE : FALSE);
+    }
+
     for (const auto& child : binding.children) {
         const auto control = child.model.lock();
         if (!control || !child.hwnd) continue;
@@ -2067,10 +2208,35 @@ void WindowsBackend::LayoutControls(WindowBinding& binding) {
             continue;
         }
         const auto& rectangle = placement->second;
-        MoveWindow(child.hwnd, rectangle.x, rectangle.y,
+        int x = rectangle.x;
+        int y = rectangle.y;
+        HWND parent = child.parent ? child.parent : binding.hwnd;
+        const auto owner = FindOwningScrollView(control);
+        if (owner) {
+            const auto ownerPlacement = placements.find(owner.get());
+            if (ownerPlacement != placements.end()) {
+                x -= ownerPlacement->second.x;
+                y -= ownerPlacement->second.y;
+            }
+        }
+        RECT parentClient{};
+        bool hasParentClient = false;
+        if (owner) {
+            parentClient = RECT{0, 0, owner->viewportSize.width,
+                                owner->viewportSize.height};
+            hasParentClient = true;
+        } else {
+            hasParentClient = GetClientRect(parent, &parentClient) != FALSE;
+        }
+        const RECT childRect{x, y, x + std::max(0, rectangle.width),
+                             y + std::max(0, rectangle.height)};
+        RECT intersection{};
+        const bool intersects = !hasParentClient ||
+            IntersectRect(&intersection, &parentClient, &childRect) != FALSE;
+        MoveWindow(child.hwnd, x, y,
                    std::max(0, rectangle.width),
                    std::max(0, rectangle.height), TRUE);
-        ::ShowWindow(child.hwnd, SW_SHOW);
+        ::ShowWindow(child.hwnd, intersects ? SW_SHOW : SW_HIDE);
     }
     if (binding.toolTip) {
         for (const auto& tool : binding.toolTips) {
@@ -2313,6 +2479,70 @@ void WindowsBackend::HandleNativeDestroyed(HWND hwnd) noexcept {
     }
 }
 
+void WindowsBackend::HandleScrollViewMessage(HWND hwnd, UINT message,
+                                              WPARAM wParam,
+                                              LPARAM lParam) noexcept {
+    auto* binding = FindWindowBinding(GetAncestor(hwnd, GA_ROOT));
+    if (!binding) return;
+
+    std::shared_ptr<ControlState> scrollView;
+    for (const auto& child : binding->children) {
+        if (child.hwnd == hwnd) {
+            scrollView = child.model.lock();
+            break;
+        }
+    }
+    if (!scrollView || scrollView->kind != ControlKind::ScrollView) return;
+
+    if (message == WM_COMMAND || message == WM_NOTIFY || message == WM_HSCROLL ||
+        (message == WM_VSCROLL && lParam != 0 &&
+         reinterpret_cast<HWND>(lParam) != hwnd)) {
+        SendMessageW(GetAncestor(hwnd, GA_ROOT), message, wParam, lParam);
+        return;
+    }
+
+    int nextOffset = scrollView->verticalOffset;
+    if (message == WM_MOUSEWHEEL) {
+        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if (delta == 0) return;
+        const int steps = std::max(1, std::abs(delta) / WHEEL_DELTA);
+        const int movement = steps * 48;
+        nextOffset += delta > 0 ? -movement : movement;
+    } else if (message == WM_VSCROLL) {
+        const int code = LOWORD(static_cast<DWORD>(wParam));
+        switch (code) {
+        case SB_LINEUP: nextOffset -= 48; break;
+        case SB_LINEDOWN: nextOffset += 48; break;
+        case SB_PAGEUP:
+            nextOffset -= std::max(1, scrollView->viewportSize.height);
+            break;
+        case SB_PAGEDOWN:
+            nextOffset += std::max(1, scrollView->viewportSize.height);
+            break;
+        case SB_TOP: nextOffset = 0; break;
+        case SB_BOTTOM: nextOffset = scrollView->maximumVerticalOffset; break;
+        case SB_THUMBPOSITION:
+        case SB_THUMBTRACK: {
+            SCROLLINFO info{};
+            info.cbSize = sizeof(info);
+            info.fMask = SIF_TRACKPOS;
+            if (GetScrollInfo(hwnd, SB_VERT, &info)) nextOffset = info.nTrackPos;
+            break;
+        }
+        default: return;
+        }
+    } else {
+        return;
+    }
+
+    nextOffset = std::clamp(nextOffset, 0,
+                            std::max(0, scrollView->maximumVerticalOffset));
+    if (nextOffset == scrollView->verticalOffset) return;
+    scrollView->verticalOffset = nextOffset;
+    scrollView->requestedVerticalOffset = nextOffset;
+    NotifyControlChanged(scrollView);
+}
+
 void WindowsBackend::Shutdown() noexcept {
     if (shutdown_) return;
     shutdown_ = true;
@@ -2357,6 +2587,11 @@ void WindowsBackend::Shutdown() noexcept {
         imageClassRegistered_ = false;
     }
     imageClassAtom_ = 0;
+    if (scrollViewClassRegistered_) {
+        UnregisterClassW(kScrollViewWindowClassName, instance_);
+        scrollViewClassRegistered_ = false;
+    }
+    scrollViewClassAtom_ = 0;
 }
 
 LRESULT WindowsBackend::HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
@@ -2742,6 +2977,42 @@ LRESULT CALLBACK WindowsBackend::ImageWindowProcedure(HWND hwnd, UINT message,
         break;
     default:
         break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+LRESULT CALLBACK WindowsBackend::ScrollViewWindowProcedure(
+    HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept {
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        auto* context = create
+            ? static_cast<NativeScrollViewContext*>(create->lpCreateParams)
+            : nullptr;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(context));
+        return TRUE;
+    }
+
+    auto* context = reinterpret_cast<NativeScrollViewContext*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (context && context->backend) {
+        switch (message) {
+        case WM_COMMAND:
+        case WM_NOTIFY:
+        case WM_HSCROLL:
+        case WM_VSCROLL:
+        case WM_MOUSEWHEEL:
+            context->backend->HandleScrollViewMessage(
+                hwnd, message, wParam, lParam);
+            return 0;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_NCDESTROY:
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            break;
+        default:
+            break;
+        }
     }
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }

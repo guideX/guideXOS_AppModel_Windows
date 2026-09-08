@@ -154,6 +154,7 @@ ControlType GetControlType(detail::ControlKind kind) noexcept {
     case detail::ControlKind::Slider: return ControlType::Slider;
     case detail::ControlKind::TabView: return ControlType::TabView;
     case detail::ControlKind::Image: return ControlType::Image;
+    case detail::ControlKind::ScrollView: return ControlType::ScrollView;
     }
     return ControlType::None;
 }
@@ -250,6 +251,23 @@ bool SliderRef::IsValid() const noexcept {
 
 bool ImageRef::IsValid() const noexcept {
     return static_cast<bool>(LockImage(state_));
+}
+
+bool ScrollViewRef::IsValid() const noexcept {
+    const auto state = state_.lock();
+    return state && state->kind == detail::ControlKind::ScrollView;
+}
+
+int ScrollViewRef::GetVerticalOffset() const noexcept {
+    const auto state = state_.lock();
+    return state && state->kind == detail::ControlKind::ScrollView
+        ? state->verticalOffset : 0;
+}
+
+int ScrollViewRef::GetMaximumVerticalOffset() const noexcept {
+    const auto state = state_.lock();
+    return state && state->kind == detail::ControlKind::ScrollView
+        ? state->maximumVerticalOffset : 0;
 }
 
 bool ImageRef::HasSource() const noexcept {
@@ -432,6 +450,14 @@ std::optional<ImageRef> ControlRef::AsImage() const noexcept {
         return std::nullopt;
     }
     return ImageRef{state};
+}
+
+std::optional<ScrollViewRef> ControlRef::AsScrollView() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::ScrollView) {
+        return std::nullopt;
+    }
+    return ScrollViewRef{state};
 }
 
 bool operator==(const ControlRef& left, const ControlRef& right) noexcept {

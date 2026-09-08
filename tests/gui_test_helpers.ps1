@@ -18,6 +18,11 @@ public static class GuiTestNative {
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)]
+    private struct SCROLLINFO {
+        public uint cbSize, fMask; public int nMin, nMax; public uint nPage;
+        public int nPos, nTrackPos;
+    }
+    [StructLayout(LayoutKind.Sequential)]
     private struct GUITHREADINFO {
         public int cbSize; public int flags; public IntPtr hwndActive, hwndFocus;
         public IntPtr hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
@@ -92,6 +97,8 @@ public static class GuiTestNative {
     private static extern IntPtr GetNextDlgTabItem(IntPtr parent, IntPtr child, bool previous);
     [DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern int GetScrollInfo(IntPtr hwnd, int bar, ref SCROLLINFO info);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, StringBuilder lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
@@ -437,6 +444,20 @@ public static class GuiTestNative {
     public static int Height(IntPtr hwnd) {
         RECT rect; if (!GetWindowRect(hwnd, out rect)) return 0;
         return rect.Bottom - rect.Top;
+    }
+    public static int VerticalScrollPosition(IntPtr hwnd) {
+        var info = new SCROLLINFO { cbSize = (uint)Marshal.SizeOf<SCROLLINFO>(), fMask = 0x17 };
+        GetScrollInfo(hwnd, 1, ref info);
+        return info.nPos;
+    }
+    public static int VerticalScrollMaximum(IntPtr hwnd) {
+        var info = new SCROLLINFO { cbSize = (uint)Marshal.SizeOf<SCROLLINFO>(), fMask = 0x17 };
+        GetScrollInfo(hwnd, 1, ref info);
+        return Math.Max(0, info.nMax - (int)info.nPage + 1);
+    }
+    public static void MouseWheel(IntPtr hwnd, int delta) {
+        var wheel = ((long)(ushort)delta) << 16;
+        SendMessage(hwnd, 0x020A, (IntPtr)wheel, IntPtr.Zero);
     }
     public static int[] ClientSize(IntPtr hwnd) {
         RECT rect; if (!GetClientRect(hwnd, out rect))

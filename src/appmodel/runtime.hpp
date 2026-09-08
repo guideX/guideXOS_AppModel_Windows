@@ -36,6 +36,7 @@ enum class ControlKind {
     RadioButton,
     TabView,
     Image,
+    ScrollView,
 };
 
 struct ApplicationState;
@@ -114,6 +115,13 @@ struct ControlState {
     int imageHeight = 0;
     std::string imageLoadError;
     std::shared_ptr<TabViewState> tabView;
+    std::shared_ptr<LayoutState> scrollContent;
+    LayoutSize viewportSize{};
+    LayoutSize contentSize{};
+    int verticalOffset = 0;
+    int maximumVerticalOffset = 0;
+    int requestedVerticalOffset = 0;
+    bool viewportKnown = false;
     std::function<void()> onClick;
     std::function<void(const std::string&)> onTextChanged;
     std::function<void(std::optional<std::size_t>)> onSelectionChanged;
@@ -150,6 +158,7 @@ struct LayoutState {
     std::weak_ptr<LayoutState> parent;
     std::weak_ptr<WindowState> contentWindow;
     std::weak_ptr<TabPageState> tabPage;
+    std::weak_ptr<ControlState> scrollViewOwner;
 };
 
 struct TabPageState {
@@ -312,6 +321,10 @@ void CollectControls(const std::shared_ptr<LayoutState>& layout,
                      std::vector<std::shared_ptr<ControlState>>& controls);
 void CollectAllControls(const std::shared_ptr<LayoutState>& layout,
                         std::vector<std::shared_ptr<ControlState>>& controls);
+std::shared_ptr<ControlState> FindOwningScrollView(
+    const std::shared_ptr<ControlState>& control) noexcept;
+void UpdateScrollViewGeometry(const std::shared_ptr<ControlState>& scrollView,
+                              LayoutSize viewport, LayoutSize content) noexcept;
 
 bool ShowWindow(const std::shared_ptr<WindowState>& window);
 void RequestWindowClose(const std::shared_ptr<WindowState>& window) noexcept;

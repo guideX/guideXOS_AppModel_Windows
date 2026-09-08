@@ -3,7 +3,7 @@
 ## Boundary
 
 ```text
-HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / ProgressBarApp / SliderApp / ImageApp / TabViewApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
+HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / ProgressBarApp / SliderApp / ImageApp / ScrollViewApp / TabViewApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
           |
           v
 Public guideXOS App Model API (include/guidexos/appmodel)
@@ -23,7 +23,7 @@ Platform-neutral runtime state and backend contract (src/appmodel, src/platform)
           +--> Native desktop windows, controls, session clipboard, and shell file drops
 ```
 
-The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Slider`, `Image`, `ImageSource`, `TabView`, `TabPage`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Slider`, `Image`, `ImageSource`, `ScrollView`, `TabView`, `TabPage`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
 
 ## TabView container boundary
 
@@ -54,6 +54,52 @@ initial realization and resize; no fixed header height is part of the public
 or layout model. Runtime tab addition rebuilds only the affected native
 children when page content changes and preserves the current selection.
 Tab removal is intentionally deferred.
+
+## ScrollView viewport boundary
+
+`ScrollView` is a portable control with a first-class nested content
+`Layout`. Its `ControlState` stores the viewport size, measured content size,
+current vertical offset, maximum offset, and a pending pre-realization offset.
+The parent layout allocates only the viewport rectangle; the nested content
+layout is measured independently, so content taller than the viewport produces
+a real range:
+
+```text
+parent Layout allocation
+          |
+          v
+ScrollView viewport 500 x 300
+          |
+          +--> content Layout 500 x 1200
+                    |
+                    +--> maximum vertical offset = 900
+```
+
+Offsets are clamped in the model. A shorter content extent forces both maximum
+offset and current offset to zero; viewport growth and content shrink clamp a
+previous bottom position downward. `SetVerticalOffset()` works before and
+after realization, and `ScrollViewRef` exposes only portable offset queries.
+The public API does not expose scrollbar ranges, Windows messages, handles, or
+native coordinate structures.
+
+The Windows backend makes the smallest ownership repair needed for clipping:
+each realized ScrollView gets a private child host with `WS_CLIPCHILDREN`,
+`WS_CLIPSIBLINGS`, and a private vertical scrollbar. Controls inside its
+content tree are native children of that host; nested ScrollViews get nested
+hosts. Their logical placements are translated by the ScrollView offset, and
+fully offscreen children are hidden while the host clips partial children.
+Host notifications forward to the owning top-level binding, preserving the
+existing model-first callback and multi-window routing rules.
+
+Wheel input is routed from the host and its descendant controls to the model.
+Native line/page/thumb/top/bottom actions update the same offset and refresh
+the native range without exposing `WM_MOUSEWHEEL`, `WM_VSCROLL`, or
+`SCROLLINFO` publicly. Resize, close/reopen, Image replacement, and TabView
+page switching remeasure and reposition the same logical controls; content
+state remains in the AppModel objects. ScrollView inside a TabView page is
+required coverage, and TabView inside ScrollView is supported through the
+ordinary recursive control collection. Horizontal, inertial/touch, and
+automatic keyboard scroll-to-focus behavior remain deferred.
 
 ## Image decode and paint boundary
 
@@ -646,6 +692,8 @@ which remains expanding by default to preserve the earlier vertical behavior.
 `TextArea` is natural by default but reports a multi-row preferred and minimum
 viewport, so adding it with `LayoutSizing::Expand` gives an editor meaningful
 vertical space without changing the general allocator.
+`ScrollView` is a viewport control and expands by default; its content layout
+is measured separately from the viewport allocation.
 `Orientation::Vertical` allocates the main-axis
 height; `Orientation::Horizontal` allocates the main-axis width. Children
 stretch across the cross axis, which preserves the original vertical sample
@@ -995,9 +1043,11 @@ is no directory enumeration, copy/move/delete API, stream/async/watch API,
 locking, autosave, recovery, recent-files system, or generic document
 framework. Layout is
 intentionally limited to vertical/horizontal stacks, natural/expand sizing,
-equal expansion, spacing, padding, minimum-aware clipping, and spacers. It has
-no grid/table, weights, percentages, anchors, public min/max constraints,
-scroll container, designer metadata, or responsive breakpoint system. Neutral
+equal expansion, spacing, padding, minimum-aware clipping, and spacers. The
+ScrollView is limited to vertical scrolling with a clipped native host; it has
+no horizontal, inertial, touch, zoom, or virtualized scrolling. The layout
+system has no grid/table, weights, percentages, anchors, public min/max
+constraints, designer metadata, or responsive breakpoint system. Neutral
 text widths remain bounded logical fallbacks, while the Windows backend can use
 the assigned native font and text extent; there is no public text-measurement
 or DPI abstraction. `TextBox` is intentionally single-line; `TextArea` provides

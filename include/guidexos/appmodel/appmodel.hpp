@@ -10,6 +10,7 @@
 #include "layout.hpp"
 #include "menu.hpp"
 #include "status_bar.hpp"
+#include "scroll_view.hpp"
 #include "tab_view.hpp"
 #include "timer.hpp"
 #include "window.hpp"

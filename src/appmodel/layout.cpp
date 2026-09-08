@@ -3,6 +3,7 @@
 #include "guidexos/appmodel/controls.hpp"
 #include "guidexos/appmodel/image.hpp"
 #include "guidexos/appmodel/tab_view.hpp"
+#include "guidexos/appmodel/scroll_view.hpp"
 #include "runtime.hpp"
 
 #include <algorithm>
@@ -91,6 +92,10 @@ void Layout::Add(Slider& slider, LayoutSizing sizing) {
     AddControlToLayout(state_, slider.state_, sizing);
 }
 
+void Layout::Add(ScrollView& scrollView, LayoutSizing sizing) {
+    AddControlToLayout(state_, scrollView.state_, sizing);
+}
+
 void Layout::Add(RadioButton& radioButton, LayoutSizing sizing) {
     AddControlToLayout(state_, radioButton.state_, sizing);
 }
@@ -119,6 +124,9 @@ void Layout::Add(Layout& layout, LayoutSizing sizing) {
     }
     if (layout.state_->tabPage.lock()) {
         throw std::logic_error("A TabPage Layout cannot be nested");
+    }
+    if (layout.state_->scrollViewOwner.lock()) {
+        throw std::logic_error("A ScrollView content Layout cannot be nested");
     }
     if (std::find_if(state_->children.begin(), state_->children.end(),
                      [&layout](const detail::LayoutItem& item) {

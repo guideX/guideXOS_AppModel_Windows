@@ -15,6 +15,7 @@ class ListBox;
 class ProgressBar;
 class RadioButton;
 class Slider;
+class ScrollView;
 class TextArea;
 class TextBox;
 class TabView;
@@ -76,6 +77,9 @@ public:
     void Add(ProgressBar& progressBar,
              LayoutSizing sizing = LayoutSizing::Natural);
     void Add(Slider& slider, LayoutSizing sizing = LayoutSizing::Natural);
+    // ScrollView is a viewport control. It expands by default so its nested
+    // content can exceed the space assigned by the parent layout.
+    void Add(ScrollView& scrollView, LayoutSizing sizing = LayoutSizing::Expand);
     void Add(RadioButton& radioButton,
              LayoutSizing sizing = LayoutSizing::Natural);
     void Add(TextBox& textBox, LayoutSizing sizing = LayoutSizing::Natural);
@@ -113,6 +117,7 @@ private:
 
     friend class Window;
     friend class TabPage;
+    friend class ScrollView;
 };
 
 } // namespace guidexos::appmodel
