@@ -5,6 +5,7 @@
 #include "file_drop.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -202,6 +203,12 @@ LayoutMeasurement NeutralControlMeasurement(const ControlState& control) {
         return {{220, 32}, {96, 24}};
     case ControlKind::TabView:
         return {{360, 260}, {180, 120}};
+    case ControlKind::Image:
+        if (control.imageLoadStatus == ImageLoadStatus::Loaded &&
+            control.imageWidth > 0 && control.imageHeight > 0) {
+            return {{control.imageWidth, control.imageHeight}, {1, 1}};
+        }
+        return {{220, 140}, {1, 1}};
     }
     return {};
 }
@@ -600,6 +607,16 @@ void NotifyControlChanged(const std::shared_ptr<ControlState>& control) {
     }
 }
 
+void SetImageLoadResult(const std::shared_ptr<ControlState>& control,
+                        ImageLoadStatus status, int width, int height,
+                        std::string error) {
+    if (!control || control->kind != ControlKind::Image) return;
+    control->imageLoadStatus = status;
+    control->imageWidth = status == ImageLoadStatus::Loaded ? std::max(0, width) : 0;
+    control->imageHeight = status == ImageLoadStatus::Loaded ? std::max(0, height) : 0;
+    control->imageLoadError = std::move(error);
+}
+
 void NotifyStatusBarChanged(
     const std::shared_ptr<StatusBarState>& statusBar) {
     if (!statusBar) return;
@@ -680,6 +697,79 @@ LayoutMeasurement GetControlMeasurement(
 
 LayoutMeasurement GetNeutralControlMeasurement(const ControlState& control) {
     return NormalizeMeasurement(NeutralControlMeasurement(control));
+}
+
+ImageRenderGeometry CalculateImageRenderGeometry(
+    int sourceWidth, int sourceHeight, LayoutRect destination,
+    ImageScaleMode mode) noexcept {
+    ImageRenderGeometry geometry{};
+    if (sourceWidth <= 0 || sourceHeight <= 0 || destination.width <= 0 ||
+        destination.height <= 0) {
+        return geometry;
+    }
+
+    const int destinationWidth = destination.width;
+    const int destinationHeight = destination.height;
+    geometry.sourceX = 0;
+    geometry.sourceY = 0;
+    geometry.sourceWidth = sourceWidth;
+    geometry.sourceHeight = sourceHeight;
+
+    if (mode == ImageScaleMode::Stretch) {
+        geometry.x = destination.x;
+        geometry.y = destination.y;
+        geometry.width = destinationWidth;
+        geometry.height = destinationHeight;
+        return geometry;
+    }
+
+    const long double widthScale = static_cast<long double>(destinationWidth) /
+        static_cast<long double>(sourceWidth);
+    const long double heightScale = static_cast<long double>(destinationHeight) /
+        static_cast<long double>(sourceHeight);
+    const long double scale = mode == ImageScaleMode::Fill
+        ? std::max(widthScale, heightScale)
+        : std::min(widthScale, heightScale);
+    if (!(scale > 0.0L) || !std::isfinite(scale)) return {};
+
+    const auto RoundedBounded = [](long double value, int minimum,
+                                   int maximum) noexcept {
+        if (!(value > 0.0L) || !std::isfinite(value)) return minimum;
+        const long double rounded = std::round(value);
+        if (rounded <= static_cast<long double>(minimum)) return minimum;
+        if (rounded >= static_cast<long double>(maximum)) return maximum;
+        return static_cast<int>(rounded);
+    };
+
+    if (mode == ImageScaleMode::Fit) {
+        const int width = RoundedBounded(
+            static_cast<long double>(sourceWidth) * scale, 1,
+            destinationWidth);
+        const int height = RoundedBounded(
+            static_cast<long double>(sourceHeight) * scale, 1,
+            destinationHeight);
+        geometry.width = width;
+        geometry.height = height;
+        geometry.x = destination.x + (destinationWidth - width) / 2;
+        geometry.y = destination.y + (destinationHeight - height) / 2;
+        return geometry;
+    }
+
+    // Fill maps the centered source crop into the complete destination. The
+    // source rectangle is rounded conservatively and always remains valid.
+    const int visibleWidth = RoundedBounded(
+        static_cast<long double>(destinationWidth) / scale, 1, sourceWidth);
+    const int visibleHeight = RoundedBounded(
+        static_cast<long double>(destinationHeight) / scale, 1, sourceHeight);
+    geometry.x = destination.x;
+    geometry.y = destination.y;
+    geometry.width = destinationWidth;
+    geometry.height = destinationHeight;
+    geometry.sourceX = (sourceWidth - visibleWidth) / 2;
+    geometry.sourceY = (sourceHeight - visibleHeight) / 2;
+    geometry.sourceWidth = visibleWidth;
+    geometry.sourceHeight = visibleHeight;
+    return geometry;
 }
 
 LayoutMeasurement GetLayoutMeasurement(
@@ -886,7 +976,8 @@ void ClearNativeFocus(const std::shared_ptr<WindowState>& window,
 
 bool FocusControl(const std::shared_ptr<ControlState>& control) noexcept {
     if (!control || control->kind == ControlKind::Label ||
-        control->kind == ControlKind::ProgressBar || !control->enabled) {
+        control->kind == ControlKind::ProgressBar ||
+        control->kind == ControlKind::Image || !control->enabled) {
         return false;
     }
     const auto window = FindOwningWindow(control);

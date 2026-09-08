@@ -4,6 +4,7 @@
 #include "guidexos/appmodel/controls.hpp"
 #include "guidexos/appmodel/dialogs.hpp"
 #include "guidexos/appmodel/file_drop.hpp"
+#include "guidexos/appmodel/image.hpp"
 #include "guidexos/appmodel/layout.hpp"
 #include "guidexos/appmodel/menu.hpp"
 #include "platform/platform_backend.hpp"
@@ -34,6 +35,7 @@ enum class ControlKind {
     Slider,
     RadioButton,
     TabView,
+    Image,
 };
 
 struct ApplicationState;
@@ -58,6 +60,20 @@ enum class WindowCloseState {
 struct LayoutMeasurement {
     LayoutSize natural;
     LayoutSize minimum;
+};
+
+// Platform-neutral source/destination geometry used by image backends. The
+// source rectangle is in decoded pixels; the destination rectangle is in the
+// Image control's logical client coordinates.
+struct ImageRenderGeometry {
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    int sourceX = 0;
+    int sourceY = 0;
+    int sourceWidth = 0;
+    int sourceHeight = 0;
 };
 
 // A backend can provide native information for a realized control without
@@ -91,6 +107,12 @@ struct ControlState {
     std::size_t caretIndex = 0;
     TextRange selection{};
     std::weak_ptr<LayoutState> layoutParent;
+    std::optional<ImageSource> imageSource;
+    ImageScaleMode imageScaleMode = ImageScaleMode::Fit;
+    ImageLoadStatus imageLoadStatus = ImageLoadStatus::Empty;
+    int imageWidth = 0;
+    int imageHeight = 0;
+    std::string imageLoadError;
     std::shared_ptr<TabViewState> tabView;
     std::function<void()> onClick;
     std::function<void(const std::string&)> onTextChanged;
@@ -241,6 +263,9 @@ void NotifyWindowChanged(const std::shared_ptr<WindowState>& window);
 void NotifyWindowSizeChanged(const std::shared_ptr<WindowState>& window);
 void NotifyLayoutChanged(const std::shared_ptr<LayoutState>& layout);
 void NotifyControlChanged(const std::shared_ptr<ControlState>& control);
+void SetImageLoadResult(const std::shared_ptr<ControlState>& control,
+                        ImageLoadStatus status, int width, int height,
+                        std::string error);
 void NotifyMenuChanged(const std::shared_ptr<MenuState>& menu);
 void NotifyMenuItemChanged(const std::shared_ptr<MenuItemState>& item);
 void NotifyStatusBarChanged(const std::shared_ptr<StatusBarState>& statusBar);
@@ -277,6 +302,9 @@ LayoutMeasurement GetControlMeasurement(
     const std::shared_ptr<ControlState>& control,
     const LayoutMeasurementProvider* provider = nullptr);
 LayoutMeasurement GetNeutralControlMeasurement(const ControlState& control);
+ImageRenderGeometry CalculateImageRenderGeometry(
+    int sourceWidth, int sourceHeight, LayoutRect destination,
+    ImageScaleMode mode) noexcept;
 LayoutMeasurement GetLayoutMeasurement(
     const std::shared_ptr<LayoutState>& layout,
     const LayoutMeasurementProvider* provider = nullptr);

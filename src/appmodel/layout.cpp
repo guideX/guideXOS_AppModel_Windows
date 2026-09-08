@@ -1,6 +1,7 @@
 #include "guidexos/appmodel/layout.hpp"
 
 #include "guidexos/appmodel/controls.hpp"
+#include "guidexos/appmodel/image.hpp"
 #include "guidexos/appmodel/tab_view.hpp"
 #include "runtime.hpp"
 
@@ -72,6 +73,10 @@ void Layout::Add(CheckBox& checkBox, LayoutSizing sizing) {
 
 void Layout::Add(ComboBox& comboBox, LayoutSizing sizing) {
     AddControlToLayout(state_, comboBox.state_, sizing);
+}
+
+void Layout::Add(Image& image, LayoutSizing sizing) {
+    AddControlToLayout(state_, image.state_, sizing);
 }
 
 void Layout::Add(ListBox& listBox, LayoutSizing sizing) {

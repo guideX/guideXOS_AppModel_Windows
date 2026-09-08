@@ -6,6 +6,7 @@
 #include "dialogs.hpp"
 #include "file.hpp"
 #include "file_drop.hpp"
+#include "image.hpp"
 #include "layout.hpp"
 #include "menu.hpp"
 #include "status_bar.hpp"

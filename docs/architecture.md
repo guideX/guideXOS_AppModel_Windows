@@ -3,7 +3,7 @@
 ## Boundary
 
 ```text
-HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / ProgressBarApp / SliderApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
+HelloApp / MultiWindowApp / TextInputApp / TextEditingApp / MultilineTextApp / ListBoxApp / ComboBoxApp / ChoiceControlsApp / ProgressBarApp / SliderApp / ImageApp / TabViewApp / DialogApp / ClipboardApp / FileDropApp / PolishApp / TimerApp
           |
           v
 Public guideXOS App Model API (include/guidexos/appmodel)
@@ -18,11 +18,12 @@ Platform-neutral runtime state and backend contract (src/appmodel, src/platform)
           +--> Private Windows shell file-drop backend (src/platform/windows)
           +--> Private Windows common-controls chrome backend (src/platform/windows)
           +--> Private Windows event-loop timer backend (src/platform/windows)
+          +--> Private Windows raster decode/paint backend (src/platform/windows)
           |
           +--> Native desktop windows, controls, session clipboard, and shell file drops
 ```
 
-The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Slider`, `TabView`, `TabPage`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
+The samples know only `Application`, `Window`, `Label`, `Button`, `TextBox`, `TextArea`, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, `Slider`, `Image`, `ImageSource`, `TabView`, `TabPage`, `Layout`, `MenuBar`, `Menu`, `MenuItem`, `StatusBar`, `Timer`, `KeyShortcut`, `Clipboard`, `File`, `FileDropEvent`, and the synchronous dialog/file-picker contracts. Public headers contain no Windows SDK include, native handle, message parameter, COM type, clipboard handle, UTF-16 buffer, Win32 error code, or platform callback type.
 
 ## TabView container boundary
 
@@ -53,6 +54,47 @@ initial realization and resize; no fixed header height is part of the public
 or layout model. Runtime tab addition rebuilds only the affected native
 children when page content changes and preserves the current selection.
 Tab removal is intentionally deferred.
+
+## Image decode and paint boundary
+
+`ImageSource` is a small immutable value containing a validated UTF-8 file
+path. `Image` stores that source, its load status, decoded dimensions, and
+portable `ImageScaleMode`; all of those model values exist independently of a
+shown Window. A source assigned before realization is marked pending and is
+decoded synchronously when the Windows backend creates or refreshes the Image
+child. Replacing or clearing a source first drops the old decoded surface, so
+failed replacement cannot leave stale pixels visible. Closing a Window destroys
+only the native child; the logical source and current status remain available
+for a later realization.
+
+The Windows boundary initializes COM once for the backend lifetime and creates
+one private WIC imaging factory. It accepts PNG and JPEG as the supported
+formats, with BMP accepted by the same decoder when available. The first frame
+is converted to 32-bit premultiplied BGRA pixels. Width, height, stride, pixel
+count, and byte size are checked before allocation and copy; dimensions above
+16,384 or decoded buffers above 64 million pixels are rejected. The private
+surface owns its DIB and memory device context, and its destructor releases
+both. No WIC interface, COM pointer, GDI handle, or bitmap structure crosses
+the public or platform-neutral boundary.
+
+The private Image child paints its background on every `WM_PAINT`, then uses
+the premultiplied alpha surface for native source-over blending. This means
+fully transparent PNG pixels reveal the control background and partially
+transparent pixels retain their alpha. Paint is invalidated after source or
+scale-mode changes, and normal parent resize/expose processing causes another
+paint. Fit, Fill, and Stretch geometry is computed by the platform-neutral
+runtime: Fit centers the complete source, Fill centers a crop while covering
+the destination, and Stretch maps the complete source to the destination
+without preserving aspect ratio.
+
+Image controls participate in ordinary recursive layout measurement. A source
+without a successful decode uses a 220 × 140 fallback natural size and 1 × 1
+minimum; a decoded source uses its pixel dimensions as its natural size. The
+control is non-focusable and has no keyboard input path. Generic ToolTips and
+`ControlRef::AsImage()` use the same weak model identity and lifetime rules as
+the other controls. `ImageApp` and the native Image test cover source
+replacement, alpha, resize/repaint, close/reopen, invalid files, and Image in
+a TabView page.
 
 ## Process-wide text clipboard
 

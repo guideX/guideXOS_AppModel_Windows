@@ -4,11 +4,13 @@
 #include <commctrl.h>
 #include <shobjidl.h>
 #include <shellapi.h>
+#include <wincodec.h>
 
 #include "appmodel/runtime.hpp"
 #include "appmodel/text_index.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <limits>
@@ -26,8 +28,12 @@ namespace guidexos::appmodel::detail {
 namespace {
 
 constexpr wchar_t kWindowClassName[] = L"guideXOS.AppModel.Windows.Foundation";
+constexpr wchar_t kImageWindowClassName[] = L"guideXOS.AppModel.Windows.Image";
 constexpr int kMinimumClientWidth = 320;
 constexpr int kMinimumClientHeight = 180;
+constexpr UINT kMaximumImageDimension = 16384;
+constexpr std::uint64_t kMaximumImagePixels = 64ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaximumImageBytes = kMaximumImagePixels * 4ULL;
 
 bool InitializeCommonControls() noexcept {
     static std::once_flag once;
@@ -179,6 +185,110 @@ struct ComReleaser {
 
 template <typename T>
 using ComPtr = std::unique_ptr<T, ComReleaser<T>>;
+
+class NativeImageSurface final {
+public:
+    NativeImageSurface(UINT width, UINT height) noexcept
+        : width_(width), height_(height) {
+        if (width_ == 0 || height_ == 0 || width_ > kMaximumImageDimension ||
+            height_ > kMaximumImageDimension) {
+            return;
+        }
+
+        dc_ = CreateCompatibleDC(nullptr);
+        if (!dc_) return;
+
+        BITMAPINFO bitmapInfo{};
+        bitmapInfo.bmiHeader.biSize = sizeof(bitmapInfo.bmiHeader);
+        bitmapInfo.bmiHeader.biWidth = static_cast<LONG>(width_);
+        bitmapInfo.bmiHeader.biHeight = -static_cast<LONG>(height_);
+        bitmapInfo.bmiHeader.biPlanes = 1;
+        bitmapInfo.bmiHeader.biBitCount = 32;
+        bitmapInfo.bmiHeader.biCompression = BI_RGB;
+        bitmap_ = CreateDIBSection(dc_, &bitmapInfo, DIB_RGB_COLORS,
+                                   &pixels_, nullptr, 0);
+        if (!bitmap_ || !pixels_) return;
+        previous_ = SelectObject(dc_, bitmap_);
+        if (!previous_) {
+            DeleteObject(bitmap_);
+            bitmap_ = nullptr;
+            pixels_ = nullptr;
+            return;
+        }
+        valid_ = true;
+    }
+
+    ~NativeImageSurface() {
+        if (dc_ && previous_) SelectObject(dc_, previous_);
+        if (bitmap_) DeleteObject(bitmap_);
+        if (dc_) DeleteDC(dc_);
+    }
+
+    NativeImageSurface(const NativeImageSurface&) = delete;
+    NativeImageSurface& operator=(const NativeImageSurface&) = delete;
+
+    bool IsValid() const noexcept { return valid_; }
+    UINT GetWidth() const noexcept { return width_; }
+    UINT GetHeight() const noexcept { return height_; }
+    HDC GetDC() const noexcept { return dc_; }
+    void* GetPixels() const noexcept { return pixels_; }
+
+private:
+    UINT width_{};
+    UINT height_{};
+    HDC dc_{};
+    HBITMAP bitmap_{};
+    HGDIOBJ previous_{};
+    void* pixels_{};
+    bool valid_{false};
+};
+
+struct NativeImageWindowContext {
+    std::weak_ptr<ControlState> model;
+    std::shared_ptr<NativeImageSurface> surface;
+};
+
+void PaintImageWindow(HWND hwnd, NativeImageWindowContext* context) noexcept {
+    PAINTSTRUCT paint{};
+    const HDC dc = BeginPaint(hwnd, &paint);
+    if (!dc) return;
+
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    FillRect(dc, &client, GetSysColorBrush(COLOR_WINDOW));
+
+    try {
+        const auto model = context ? context->model.lock() : nullptr;
+        const auto surface = context ? context->surface : nullptr;
+        if (model && surface && surface->IsValid()) {
+            const int width = std::max(0L, client.right - client.left);
+            const int height = std::max(0L, client.bottom - client.top);
+            const ImageRenderGeometry geometry =
+                CalculateImageRenderGeometry(
+                    static_cast<int>(surface->GetWidth()),
+                    static_cast<int>(surface->GetHeight()),
+                    LayoutRect{0, 0, width, height},
+                    model->imageScaleMode);
+            if (geometry.width > 0 && geometry.height > 0 &&
+                geometry.sourceWidth > 0 && geometry.sourceHeight > 0) {
+                BLENDFUNCTION blend{};
+                blend.BlendOp = AC_SRC_OVER;
+                blend.SourceConstantAlpha = 255;
+                blend.AlphaFormat = AC_SRC_ALPHA;
+                AlphaBlend(dc, geometry.x, geometry.y, geometry.width,
+                           geometry.height, surface->GetDC(),
+                           geometry.sourceX, geometry.sourceY,
+                           geometry.sourceWidth, geometry.sourceHeight,
+                           blend);
+            }
+        }
+    } catch (...) {
+        // Paint is a best-effort backend operation. The already-cleared
+        // background remains visible if a surface or geometry operation fails.
+    }
+
+    EndPaint(hwnd, &paint);
+}
 
 struct CoTaskMemReleaser {
     void operator()(wchar_t* value) const noexcept {
@@ -652,6 +762,8 @@ public:
                 return {{220, 32}, {96, 24}};
             case ControlKind::TabView:
                 return {{360, 260}, {180, 120}};
+            case ControlKind::Image:
+                return GetNeutralControlMeasurement(control);
             }
         } catch (...) {
             // Native realization is an optimization. A valid neutral
@@ -679,6 +791,9 @@ struct WindowsBackend::ChildBinding {
     bool nativeReadOnly{false};
     bool nativeWordWrap{true};
     std::vector<std::string> nativeItems;
+    std::unique_ptr<NativeImageWindowContext> imageContext;
+    std::string nativeImagePath;
+    bool imageDecodeAttempted{false};
 };
 
 struct WindowsBackend::ToolTipBinding {
@@ -703,17 +818,110 @@ struct WindowsBackend::WindowBinding {
     bool menuRefreshPending{false};
 };
 
+struct WindowsBackend::ComInitialization {
+    ComInitialization() noexcept {
+        const HRESULT result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        initialized = result == S_OK || result == S_FALSE;
+    }
+
+    ~ComInitialization() {
+        if (initialized) CoUninitialize();
+    }
+
+    ComInitialization(const ComInitialization&) = delete;
+    ComInitialization& operator=(const ComInitialization&) = delete;
+
+    bool initialized = false;
+};
+
+struct WindowsBackend::NativeImageDecoder {
+    NativeImageDecoder() noexcept {
+        IWICImagingFactory* rawFactory = nullptr;
+        if (SUCCEEDED(CoCreateInstance(
+                CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                IID_PPV_ARGS(&rawFactory)))) {
+            factory.reset(rawFactory);
+        }
+    }
+
+    std::shared_ptr<NativeImageSurface> Decode(const std::string& path) const {
+        if (!factory || path.empty()) return nullptr;
+
+        const std::wstring nativePath = Utf8ToWide(path);
+        IWICBitmapDecoder* rawDecoder = nullptr;
+        if (FAILED(factory->CreateDecoderFromFilename(
+                nativePath.c_str(), nullptr, GENERIC_READ,
+                WICDecodeMetadataCacheOnLoad, &rawDecoder))) {
+            return nullptr;
+        }
+        ComPtr<IWICBitmapDecoder> decoder(rawDecoder);
+
+        IWICBitmapFrameDecode* rawFrame = nullptr;
+        if (FAILED(decoder->GetFrame(0, &rawFrame))) return nullptr;
+        ComPtr<IWICBitmapFrameDecode> frame(rawFrame);
+
+        UINT width = 0;
+        UINT height = 0;
+        if (FAILED(frame->GetSize(&width, &height)) || width == 0 ||
+            height == 0 || width > kMaximumImageDimension ||
+            height > kMaximumImageDimension) {
+            return nullptr;
+        }
+
+        const std::uint64_t pixels = static_cast<std::uint64_t>(width) * height;
+        if (pixels == 0 || pixels > kMaximumImagePixels ||
+            pixels > kMaximumImageBytes / 4ULL) {
+            return nullptr;
+        }
+        const std::uint64_t stride64 = static_cast<std::uint64_t>(width) * 4ULL;
+        const std::uint64_t bufferSize64 = stride64 * height;
+        if (stride64 > std::numeric_limits<UINT>::max() ||
+            bufferSize64 > std::numeric_limits<UINT>::max()) {
+            return nullptr;
+        }
+
+        IWICFormatConverter* rawConverter = nullptr;
+        if (FAILED(factory->CreateFormatConverter(&rawConverter))) {
+            return nullptr;
+        }
+        ComPtr<IWICFormatConverter> converter(rawConverter);
+        if (FAILED(converter->Initialize(
+                frame.get(), GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone, nullptr, 0.0,
+                WICBitmapPaletteTypeCustom))) {
+            return nullptr;
+        }
+
+        auto surface = std::make_shared<NativeImageSurface>(width, height);
+        if (!surface->IsValid()) return nullptr;
+        if (FAILED(converter->CopyPixels(
+                nullptr, static_cast<UINT>(stride64),
+                static_cast<UINT>(bufferSize64),
+                static_cast<BYTE*>(surface->GetPixels())))) {
+            return nullptr;
+        }
+        return surface;
+    }
+
+    ComPtr<IWICImagingFactory> factory;
+};
+
 WindowsBackend::WindowsBackend(std::shared_ptr<ApplicationState> application)
     : application_(std::move(application)),
       instance_(GetModuleHandleW(nullptr)),
-      commonControlsReady_(InitializeCommonControls()) {}
+      commonControlsReady_(InitializeCommonControls()) {
+    // COM and the decoder factory live for the backend lifetime. Painting
+    // never performs apartment initialization or codec discovery.
+    comInitialization_ = std::make_unique<ComInitialization>();
+    imageDecoder_ = std::make_unique<NativeImageDecoder>();
+}
 
 WindowsBackend::~WindowsBackend() {
     Shutdown();
 }
 
 bool WindowsBackend::RegisterWindowClass() {
-    if (classAtom_ != 0) return true;
+    if (classAtom_ != 0) return RegisterImageWindowClass();
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -727,12 +935,37 @@ bool WindowsBackend::RegisterWindowClass() {
     classAtom_ = RegisterClassExW(&windowClass);
     if (classAtom_ != 0) {
         registeredClass_ = true;
-        return true;
+        return RegisterImageWindowClass();
     }
 
     if (GetLastError() == ERROR_CLASS_ALREADY_EXISTS &&
         GetClassInfoExW(instance_, kWindowClassName, &windowClass) != FALSE) {
         classAtom_ = 1;
+        return RegisterImageWindowClass();
+    }
+    return false;
+}
+
+bool WindowsBackend::RegisterImageWindowClass() {
+    if (imageClassAtom_ != 0) return true;
+
+    WNDCLASSEXW windowClass{};
+    windowClass.cbSize = sizeof(windowClass);
+    windowClass.style = CS_HREDRAW | CS_VREDRAW;
+    windowClass.lpfnWndProc = &WindowsBackend::ImageWindowProcedure;
+    windowClass.hInstance = instance_;
+    windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    windowClass.lpszClassName = kImageWindowClassName;
+
+    imageClassAtom_ = RegisterClassExW(&windowClass);
+    if (imageClassAtom_ != 0) {
+        imageClassRegistered_ = true;
+        return true;
+    }
+
+    if (GetLastError() == ERROR_CLASS_ALREADY_EXISTS &&
+        GetClassInfoExW(instance_, kImageWindowClassName, &windowClass) != FALSE) {
+        imageClassAtom_ = 1;
         return true;
     }
     return false;
@@ -1179,6 +1412,10 @@ void WindowsBackend::RefreshWindow(const std::shared_ptr<WindowState>& window) {
                 SynchronizeTabView(current->children[index], *control);
                 continue;
             }
+            if (control->kind == ControlKind::Image) {
+                SynchronizeImage(current->children[index], *control);
+                continue;
+            }
             if (control->kind == ControlKind::CheckBox) {
                 SynchronizeCheckBox(current->children[index], *control);
             } else if (control->kind == ControlKind::RadioButton) {
@@ -1323,11 +1560,12 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         const bool isSlider = control->kind == ControlKind::Slider;
         const bool isRadioButton = control->kind == ControlKind::RadioButton;
         const bool isTabView = control->kind == ControlKind::TabView;
+        const bool isImage = control->kind == ControlKind::Image;
         const bool isInteractive = isButton || isCheckBox || isTextBox ||
             isTextArea || isListBox || isComboBox || isRadioButton || isSlider ||
             isTabView;
         DWORD style = WS_CHILD | WS_VISIBLE |
-            (isInteractive ? WS_TABSTOP : (isProgressBar ? 0 : SS_LEFT)) |
+            (isInteractive ? WS_TABSTOP : (isProgressBar || isImage ? 0 : SS_LEFT)) |
             (isCheckBox ? BS_AUTOCHECKBOX | BS_LEFT | BS_VCENTER : 0) |
             (isRadioButton ? BS_AUTORADIOBUTTON | BS_LEFT | BS_VCENTER : 0) |
             (isTextBox ? ES_AUTOHSCROLL | ES_LEFT : 0) |
@@ -1367,6 +1605,14 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
             nativeClass = TRACKBAR_CLASSW;
         } else if (isTabView) {
             nativeClass = WC_TABCONTROLW;
+        } else if (isImage) {
+            nativeClass = kImageWindowClassName;
+        }
+
+        std::unique_ptr<NativeImageWindowContext> imageContext;
+        if (isImage) {
+            imageContext = std::make_unique<NativeImageWindowContext>();
+            imageContext->model = control;
         }
         HWND child = CreateWindowExW(
             isTextBox || isTextArea || isListBox ? WS_EX_CLIENTEDGE : 0,
@@ -1382,7 +1628,7 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
                 ? reinterpret_cast<HMENU>(static_cast<INT_PTR>(commandId))
                 : nullptr,
             instance_,
-            nullptr);
+            imageContext ? imageContext.get() : nullptr);
         if (!child) continue;
 
         SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -1390,6 +1636,7 @@ void WindowsBackend::RebuildControls(WindowBinding& binding) {
         ChildBinding childBinding{control, child, commandId};
         childBinding.nativeReadOnly = isTextArea && control->readOnly;
         childBinding.nativeWordWrap = !isTextArea || control->wordWrap;
+        childBinding.imageContext = std::move(imageContext);
         binding.children.push_back(std::move(childBinding));
         InstallControlSubclass(child, control, binding.model);
     }
@@ -1672,6 +1919,62 @@ void WindowsBackend::SynchronizeTabView(ChildBinding& binding,
         TabCtrl_SetCurSel(binding.hwnd, desiredSelection);
     }
     binding.synchronizingTabSelection = previous;
+}
+
+void WindowsBackend::SynchronizeImage(ChildBinding& binding,
+                                      const ControlState& control) {
+    if (control.kind != ControlKind::Image || !binding.imageContext) return;
+
+    const auto source = control.imageSource;
+    if (!source) {
+        binding.imageContext->surface.reset();
+        binding.nativeImagePath.clear();
+        binding.imageDecodeAttempted = false;
+        if (control.imageLoadStatus != ImageLoadStatus::Empty) {
+            SetImageLoadResult(binding.model.lock(), ImageLoadStatus::Empty,
+                               0, 0, {});
+        }
+        InvalidateRect(binding.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    const std::string& path = source->GetFilePath();
+    if (binding.imageDecodeAttempted && binding.nativeImagePath == path &&
+        control.imageLoadStatus != ImageLoadStatus::Pending) {
+        // A scale-mode mutation reaches RefreshWindow without changing the
+        // source. Repaint explicitly so geometry changes do not depend on
+        // MoveWindow deciding that an unchanged rectangle needs repainting.
+        InvalidateRect(binding.hwnd, nullptr, TRUE);
+        return;
+    }
+
+    // Clear before decoding so a failed replacement can never leave the old
+    // image visible. The local shared pointer in WM_PAINT keeps an image
+    // alive only for the duration of an already-running paint.
+    binding.imageContext->surface.reset();
+    binding.nativeImagePath = path;
+    binding.imageDecodeAttempted = true;
+
+    std::shared_ptr<NativeImageSurface> surface;
+    try {
+        surface = imageDecoder_ ? imageDecoder_->Decode(path) : nullptr;
+    } catch (...) {
+        surface.reset();
+    }
+
+    const auto model = binding.model.lock();
+    if (surface && surface->IsValid()) {
+        binding.imageContext->surface = surface;
+        SetImageLoadResult(
+            model, ImageLoadStatus::Loaded,
+            static_cast<int>(surface->GetWidth()),
+            static_cast<int>(surface->GetHeight()), {});
+    } else {
+        SetImageLoadResult(
+            model, ImageLoadStatus::Failed, 0, 0,
+            "The image source could not be decoded as a supported raster file");
+    }
+    InvalidateRect(binding.hwnd, nullptr, TRUE);
 }
 
 void WindowsBackend::SynchronizeRadioButton(ChildBinding& binding,
@@ -2049,6 +2352,11 @@ void WindowsBackend::Shutdown() noexcept {
         registeredClass_ = false;
     }
     classAtom_ = 0;
+    if (imageClassRegistered_) {
+        UnregisterClassW(kImageWindowClassName, instance_);
+        imageClassRegistered_ = false;
+    }
+    imageClassAtom_ = 0;
 }
 
 LRESULT WindowsBackend::HandleMessage(HWND hwnd, UINT message, WPARAM wParam,
@@ -2402,6 +2710,40 @@ LRESULT CALLBACK WindowsBackend::WindowProcedure(HWND hwnd, UINT message,
     auto* backend = reinterpret_cast<WindowsBackend*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     if (backend) return backend->HandleMessage(hwnd, message, wParam, lParam);
     return DefWindowProcW(hwnd, message, static_cast<WPARAM>(wParam), static_cast<LPARAM>(lParam));
+}
+
+LRESULT CALLBACK WindowsBackend::ImageWindowProcedure(HWND hwnd, UINT message,
+                                                      WPARAM wParam,
+                                                      LPARAM lParam) noexcept {
+    if (message == WM_NCCREATE) {
+        const auto* create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        auto* context = create
+            ? static_cast<NativeImageWindowContext*>(create->lpCreateParams)
+            : nullptr;
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                          reinterpret_cast<LONG_PTR>(context));
+        return TRUE;
+    }
+
+    auto* context = reinterpret_cast<NativeImageWindowContext*>(
+        GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    switch (message) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_MOUSEACTIVATE:
+        return MA_NOACTIVATE;
+    case WM_LBUTTONDOWN:
+        return 0;
+    case WM_PAINT:
+        PaintImageWindow(hwnd, context);
+        return 0;
+    case WM_NCDESTROY:
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        break;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
 std::unique_ptr<PlatformBackend> CreatePlatformBackend(

@@ -133,6 +133,13 @@ std::shared_ptr<detail::ControlState> LockSlider(
     return state;
 }
 
+std::shared_ptr<detail::ControlState> LockImage(
+    const std::weak_ptr<detail::ControlState>& weakState) noexcept {
+    auto state = weakState.lock();
+    if (!state || state->kind != detail::ControlKind::Image) return nullptr;
+    return state;
+}
+
 ControlType GetControlType(detail::ControlKind kind) noexcept {
     switch (kind) {
     case detail::ControlKind::Label: return ControlType::Label;
@@ -146,6 +153,7 @@ ControlType GetControlType(detail::ControlKind kind) noexcept {
     case detail::ControlKind::ProgressBar: return ControlType::ProgressBar;
     case detail::ControlKind::Slider: return ControlType::Slider;
     case detail::ControlKind::TabView: return ControlType::TabView;
+    case detail::ControlKind::Image: return ControlType::Image;
     }
     return ControlType::None;
 }
@@ -238,6 +246,35 @@ bool ProgressBarRef::IsIndeterminate() const noexcept {
 
 bool SliderRef::IsValid() const noexcept {
     return static_cast<bool>(LockSlider(state_));
+}
+
+bool ImageRef::IsValid() const noexcept {
+    return static_cast<bool>(LockImage(state_));
+}
+
+bool ImageRef::HasSource() const noexcept {
+    const auto state = LockImage(state_);
+    return state && state->imageSource.has_value();
+}
+
+ImageScaleMode ImageRef::GetScaleMode() const noexcept {
+    const auto state = LockImage(state_);
+    return state ? state->imageScaleMode : ImageScaleMode::Fit;
+}
+
+ImageLoadStatus ImageRef::GetLoadStatus() const noexcept {
+    const auto state = LockImage(state_);
+    return state ? state->imageLoadStatus : ImageLoadStatus::Empty;
+}
+
+int ImageRef::GetWidth() const noexcept {
+    const auto state = LockImage(state_);
+    return state ? state->imageWidth : 0;
+}
+
+int ImageRef::GetHeight() const noexcept {
+    const auto state = LockImage(state_);
+    return state ? state->imageHeight : 0;
 }
 
 int SliderRef::GetMinimum() const noexcept {
@@ -387,6 +424,14 @@ std::optional<TabViewRef> ControlRef::AsTabView() const noexcept {
         return std::nullopt;
     }
     return TabViewRef{state};
+}
+
+std::optional<ImageRef> ControlRef::AsImage() const noexcept {
+    const auto state = state_.lock();
+    if (!state || state->kind != detail::ControlKind::Image) {
+        return std::nullopt;
+    }
+    return ImageRef{state};
 }
 
 bool operator==(const ControlRef& left, const ControlRef& right) noexcept {

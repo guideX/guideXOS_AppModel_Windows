@@ -9,6 +9,7 @@ namespace guidexos::appmodel {
 class Button;
 class CheckBox;
 class ComboBox;
+class Image;
 class Label;
 class ListBox;
 class ProgressBar;
@@ -68,6 +69,7 @@ public:
     void Add(Button& button, LayoutSizing sizing = LayoutSizing::Natural);
     void Add(CheckBox& checkBox, LayoutSizing sizing = LayoutSizing::Natural);
     void Add(ComboBox& comboBox, LayoutSizing sizing = LayoutSizing::Natural);
+    void Add(Image& image, LayoutSizing sizing = LayoutSizing::Natural);
     // ListBox keeps the legacy vertical behavior by expanding by default;
     // pass Natural explicitly when a content-sized list is desired.
     void Add(ListBox& listBox, LayoutSizing sizing = LayoutSizing::Expand);

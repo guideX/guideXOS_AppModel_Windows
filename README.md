@@ -1,6 +1,6 @@
 # guideXOS App Model for Windows
 
-This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, horizontal `Slider`, `TabView` pages, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, and the Windows Unicode clipboard while keeping platform handles and messages private.
+This repository is a small native Windows backend for the guideXOS App Model. Application code creates `Application`, `Window`, `Label`, `Button`, single-line `TextBox` controls, multiline `TextArea` controls, `ListBox`, `ComboBox`, `CheckBox`, `RadioButton`, `RadioGroup`, `ProgressBar`, horizontal `Slider`, portable file-backed `Image` controls, `TabView` pages, `Layout`, `MenuBar`, `Menu`, `MenuItem`, repeating `Timer`s, and process-wide text `Clipboard` access through a public C++ API. The backend realizes them with native desktop windows, controls, menus, timers, decoded raster surfaces, and the Windows Unicode clipboard while keeping platform handles and messages private.
 
 ## Current milestone
 
@@ -21,6 +21,7 @@ The current vertical slice demonstrates:
 - native-backed checkboxes and explicitly grouped radio buttons
 - portable determinate and indeterminate progress bars with clamped integer ranges
 - portable horizontal sliders with signed clamped integer ranges and user-change callbacks
+- portable file-backed raster Images with PNG/JPEG decoding, alpha, and Fit/Fill/Stretch modes
 - portable TabView pages with nested layouts, selected-page callbacks, and preserved page state
 - deterministic choice callbacks across reentrancy, multiple windows, and close/reopen
 - nested vertical and horizontal layouts with natural, expanding, and spacer items
@@ -78,7 +79,9 @@ shell.
 sample.
 `TabViewApp` is the focused multi-page settings sample; it composes nested page
 layouts from existing controls and demonstrates state preservation while
-switching pages.
+switching pages. `ImageApp` is the focused portable raster-image sample; it
+loads deterministic PNG/JPEG fixtures, changes scale mode, clears/replaces its
+source, and uses the same Image inside ordinary layouts.
 
 ## Composable layouts
 
@@ -536,6 +539,7 @@ build\Debug\ComboBoxApp.exe
 build\Debug\ProgressBarApp.exe
 build\Debug\SliderApp.exe
 build\Debug\TabViewApp.exe
+build\Debug\ImageApp.exe
 build\Debug\ProfileManagerApp.exe
 build\Debug\MenuApp.exe
 build\Debug\DialogApp.exe
@@ -570,6 +574,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\file_drop_gui_smoke.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\polish_gui_smoke.ps1 -Executable .\build\Debug\PolishApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\timer_gui_smoke.ps1 -Executable .\build\Debug\TimerApp.exe -Cycles 5
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\tab_view_gui_smoke.ps1 -Executable .\build\Debug\TabViewApp.exe -Cycles 5
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\image_gui_smoke.ps1 -Executable .\build\Debug\ImageApp.exe -Cycles 5
 ```
 
 These scripts drive the real executables and real native windows. The
@@ -1021,6 +1026,63 @@ control's reported content rectangle so headers are not overlapped, supports
 UTF-8 titles and runtime page addition, and retains normal enabled/tool-tip
 control behavior. Tab removal, icons, reordering, close buttons, and custom
 tab painting are not currently supported.
+
+## Image
+
+`Image` is a non-interactive, portable raster control. Its source is an
+immutable UTF-8 file description, so source identity and lifetime do not
+depend on a native bitmap or decoder object:
+
+```cpp
+Image logo;
+logo.SetSource(ImageSource::FromFile("assets/logo.png"));
+logo.SetScaleMode(ImageScaleMode::Fit);
+
+Layout content;
+content.Add(logo, LayoutSizing::Expand);
+window.SetContent(content);
+```
+
+`ImageSource::FromFile()` rejects empty, invalid UTF-8, and overlong paths.
+Assignment is valid before or after `Window::Show()`. Before realization the
+Image reports `Pending`; the backend then reports `Loaded` with decoded pixel
+dimensions or `Failed` with an error string. A failed replacement clears the
+previously displayed pixels, retains the requested source for inspection, and
+never reports a successful load. `ClearSource()` returns the control to the
+deterministic empty state. Reassigning an effective loaded source is suppressed;
+reassigning a failed source retries decoding.
+
+PNG and JPEG are the formally supported formats for this milestone. BMP is
+also accepted by the Windows decoder when available. PNG pixels are converted
+to a premultiplied alpha representation, so opaque, partially transparent,
+and fully transparent pixels compose against the Image/window background
+without an opaque black rectangle. Animated images, SVG, video, network
+loading, asynchronous decoding, and image editing are intentionally out of
+scope.
+
+The default scale mode is `Fit`: the complete source preserves its aspect
+ratio, is centered, and is letterboxed or pillarboxed as needed. `Stretch`
+fills the destination rectangle and may change the aspect ratio. `Fill`
+preserves the aspect ratio, covers the complete destination, and applies a
+centered crop to the overflow. Geometry is bounded and handles empty or
+zero-sized destinations without division by zero.
+
+An Image uses a 220 × 140 logical fallback natural size before a successful
+decode; after decoding, its natural size is the source pixel size and its
+minimum size is 1 × 1. It participates in nested and horizontal/vertical
+layouts and invalidates its native child when the source, mode, resize, or
+window expose state changes. It is not focusable, a tab stop, or a keyboard
+input target, although the generic enabled property is retained across
+close/reopen.
+
+ToolTips use the existing generic control mechanism. `ControlType::Image`,
+`ControlRef::AsImage()`, and `ImageRef` expose only portable state and safe
+weak lifetime behavior. The Windows backend keeps COM initialization, WIC
+decoder interfaces, decoded pixel validation, private DIB storage, and alpha
+blending entirely inside `src/platform/windows`; no public header contains a
+Windows image type. Image controls also compose with TabView pages: inactive
+page children are hidden and the decoded model state survives switching and
+close/reopen.
 
 ## Application timers
 

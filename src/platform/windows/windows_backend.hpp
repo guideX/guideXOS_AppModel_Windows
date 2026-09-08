@@ -57,6 +57,7 @@ private:
     struct WindowBinding;
 
     bool RegisterWindowClass();
+    bool RegisterImageWindowClass();
     WindowBinding* FindWindowBinding(HWND hwnd) noexcept;
     WindowBinding* FindWindowBinding(const std::shared_ptr<WindowState>& window) noexcept;
     void RebuildControls(WindowBinding& binding);
@@ -82,6 +83,8 @@ private:
                            const ControlState& control);
     void SynchronizeTabView(ChildBinding& binding,
                             const ControlState& control);
+    void SynchronizeImage(ChildBinding& binding,
+                          const ControlState& control);
     void SynchronizeRadioButton(ChildBinding& binding,
                                 const ControlState& control);
     void LayoutControls(WindowBinding& binding);
@@ -94,11 +97,19 @@ private:
 
     static LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message,
                                             WPARAM wParam, LPARAM lParam) noexcept;
+    static LRESULT CALLBACK ImageWindowProcedure(HWND hwnd, UINT message,
+                                                 WPARAM wParam,
+                                                 LPARAM lParam) noexcept;
+
+    struct ComInitialization;
+    struct NativeImageDecoder;
 
     std::weak_ptr<ApplicationState> application_;
     HINSTANCE instance_{};
     ATOM classAtom_{};
+    ATOM imageClassAtom_{};
     bool registeredClass_{false};
+    bool imageClassRegistered_{false};
     bool shutdown_{false};
     int nextControlId_{1000};
     std::uint32_t nextMenuCommandId_{0x4000};
@@ -106,6 +117,8 @@ private:
     bool commonControlsReady_{false};
     std::map<HWND, std::unique_ptr<WindowBinding>> windows_;
     std::unordered_map<UINT_PTR, std::weak_ptr<TimerState>> timers_;
+    std::unique_ptr<ComInitialization> comInitialization_;
+    std::unique_ptr<NativeImageDecoder> imageDecoder_;
 };
 
 } // namespace guidexos::appmodel::detail

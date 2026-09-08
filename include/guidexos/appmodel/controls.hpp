@@ -26,6 +26,19 @@ struct ControlState;
 struct RadioGroupState;
 }
 
+enum class ImageScaleMode {
+    Fit,
+    Fill,
+    Stretch,
+};
+
+enum class ImageLoadStatus {
+    Empty,
+    Pending,
+    Loaded,
+    Failed,
+};
+
 // A ControlRef is a non-owning, platform-neutral identity for a logical
 // control. It remains safe when the native realization is detached or the
 // owning Window is closed; it becomes invalid when the logical state is no
@@ -43,6 +56,7 @@ enum class ControlType {
     ProgressBar,
     Slider,
     TabView,
+    Image,
 };
 
 class TextBoxRef final {
@@ -145,6 +159,26 @@ private:
     friend class ControlRef;
 };
 
+class ImageRef final {
+public:
+    ImageRef() noexcept = default;
+
+    bool IsValid() const noexcept;
+    bool HasSource() const noexcept;
+    ImageScaleMode GetScaleMode() const noexcept;
+    ImageLoadStatus GetLoadStatus() const noexcept;
+    int GetWidth() const noexcept;
+    int GetHeight() const noexcept;
+
+private:
+    explicit ImageRef(std::weak_ptr<detail::ControlState> state) noexcept
+        : state_(std::move(state)) {}
+
+    std::weak_ptr<detail::ControlState> state_;
+
+    friend class ControlRef;
+};
+
 class ControlRef final {
 public:
     ControlRef() noexcept = default;
@@ -163,6 +197,7 @@ public:
     std::optional<ProgressBarRef> AsProgressBar() const noexcept;
     std::optional<SliderRef> AsSlider() const noexcept;
     std::optional<TabViewRef> AsTabView() const noexcept;
+    std::optional<ImageRef> AsImage() const noexcept;
 
     friend bool operator==(const ControlRef&, const ControlRef&) noexcept;
     friend bool operator!=(const ControlRef&, const ControlRef&) noexcept;
@@ -185,6 +220,7 @@ private:
     friend class ProgressBar;
     friend class Slider;
     friend class TabView;
+    friend class Image;
 };
 
 class Label final {
